@@ -1,0 +1,252 @@
+html,
+body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #07070b;
+  color: #e8e8f0;
+  font-family: -apple-system, "Roboto", "Helvetica Neue", sans-serif;
+}
+
+#globe {
+  position: absolute;
+  inset: 0;
+}
+
+/* Cesium's own credit line must stay visible for attribution. */
+.cesium-widget-credits {
+  font-size: 9px !important;
+  padding: 2px 6px !important;
+  background: rgba(10, 10, 15, 0.75) !important;
+  color: #9a9ab0 !important;
+}
+
+#overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  padding: 10px 12px;
+  pointer-events: none;
+  font-size: 11px;
+}
+
+/* Fades with the rest of the controls when the globe is idle. Pointer events
+   are switched off too, so invisible chips cannot be tapped by accident. */
+#hud {
+  transition: opacity 320ms ease;
+}
+
+#hud.idle,
+#hud.idle #packs,
+#hud.idle #reset {
+  opacity: 0;
+  pointer-events: none;
+}
+
+#title {
+  font-family: monospace;
+  letter-spacing: 2px;
+  color: #35e0c8;
+  font-weight: 700;
+  /* Teal over a pale rooftop measured 1.57:1; the shadow separates it. */
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.95);
+}
+
+#packs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+  pointer-events: auto;
+}
+
+.chip {
+  border: 1px solid #35404f;
+  background: rgba(10, 10, 15, 0.8);
+  color: #9a9ab0;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 10px;
+  font-family: monospace;
+}
+
+.chip.on {
+  border-color: #35e0c8;
+  color: #e8e8f0;
+}
+
+.chip .dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-right: 5px;
+  vertical-align: middle;
+}
+
+#reset {
+  pointer-events: auto;
+  margin-top: 8px;
+  background: rgba(10, 10, 15, 0.8);
+  border: 1px solid #35404f;
+  color: #9a9ab0;
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-family: monospace;
+  font-size: 10px;
+}
+
+/* These two lines used to be #6a6a80 straight onto the globe. Measured against
+   street-level imagery that fell to 1.2–2.0:1 (unreadable); a dark backing and
+   lighter ink pin them near 7:1 whatever is behind them. */
+#hint,
+#credits {
+  display: inline-block;
+  background: rgba(8, 8, 12, 0.74);
+  border-radius: 5px;
+  padding: 3px 7px;
+  color: #c8c8d8;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
+}
+
+#hint {
+  margin-top: 8px;
+  font-size: 10px;
+}
+
+/* Stays in the flow of the top overlay on purpose, and outside #hud: Cesium's
+   credit line owns the bottom-left corner, and this is required attribution so
+   it must not fade with the controls. */
+#credits {
+  margin-top: 6px;
+  max-width: 260px;
+  color: #b8b8cc;
+  font-size: 9px;
+  line-height: 1.35;
+}
+
+/* ── Camera thumbnails ──────────────────────────────────────────────────────
+   A pin says a camera exists; a thumbnail says what it is looking at. These
+   live over the Cesium canvas, positioned from world coordinates each frame,
+   so they need to be cheap: no layout thrash, transform-only movement. */
+#thumbs {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* Anchored at the camera's projected point; the card hangs above it and the
+   stem drops back down to the dot, so the card is unmistakably attached. */
+.thumb {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  will-change: transform;
+}
+
+.thumb-card {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 132px;
+  /* Deliberately not interactive: a card that ate touch events would be a
+     dead zone for panning. Taps are hit-tested in app.js instead, so dragging
+     the globe still works even when a finger starts on a card. */
+  pointer-events: none;
+  background: #06080c;
+  border: 1px solid rgba(53, 224, 200, 0.45);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.6);
+  /* --thumb-dx nudges the card inwards near the screen edge, leaving the stem
+     on the camera's actual position. */
+  transform: translate(calc(-50% + var(--thumb-dx, 0px)), calc(-100% - 16px));
+}
+
+/* Fades in on load rather than flashing an empty box into place. */
+.thumb-img {
+  display: block;
+  width: 100%;
+  height: 90px;
+  object-fit: cover;
+  background: #0b0e14;
+  opacity: 0;
+  transition: opacity 220ms ease;
+}
+
+.thumb.loaded .thumb-img {
+  opacity: 1;
+}
+
+.thumb-name {
+  padding: 3px 5px;
+  background: rgba(4, 8, 10, 0.94);
+  color: #d7f6ef;
+  font-family: monospace;
+  font-size: 8.5px;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Corner brackets, as on the parent app's cards. */
+.thumb-tl,
+.thumb-tr {
+  position: absolute;
+  top: -1px;
+  width: 9px;
+  height: 9px;
+  border-top: 2px solid #35e0c8;
+}
+
+.thumb-tl {
+  left: -1px;
+  border-left: 2px solid #35e0c8;
+}
+
+.thumb-tr {
+  right: -1px;
+  border-right: 2px solid #35e0c8;
+}
+
+/* 16px stem + the dot that marks the exact camera position. */
+.thumb-stem {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1px;
+  height: 16px;
+  background: linear-gradient(to top, rgba(53, 224, 200, 0.15), rgba(53, 224, 200, 0.6));
+  transform: translate(-0.5px, -16px);
+}
+
+.thumb-stem::after {
+  content: "";
+  position: absolute;
+  left: -2.5px;
+  bottom: -2.5px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #35e0c8;
+  box-shadow: 0 0 6px rgba(53, 224, 200, 0.85);
+}
+
+#boot {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #07070b;
+  color: #35e0c8;
+  font-family: monospace;
+  font-size: 12px;
+  letter-spacing: 1px;
+}

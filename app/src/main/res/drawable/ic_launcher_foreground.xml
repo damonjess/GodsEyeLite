@@ -1,0 +1,27 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Globe ring -->
+    <path
+        android:fillColor="#FF35E0C8"
+        android:pathData="M54,26 a28,28 0 1,0 0.01,0 z" />
+    <path
+        android:fillColor="#FF0A0A0F"
+        android:pathData="M54,32 a22,22 0 1,0 0.01,0 z" />
+
+    <!-- Crosshair -->
+    <path
+        android:fillColor="#FF35E0C8"
+        android:pathData="M52.5,30 h3 v48 h-3 z" />
+    <path
+        android:fillColor="#FF35E0C8"
+        android:pathData="M30,52.5 h48 v3 h-48 z" />
+
+    <!-- Camera node -->
+    <path
+        android:fillColor="#FF35E0C8"
+        android:pathData="M54,49 a5,5 0 1,0 0.01,0 z" />
+</vector>

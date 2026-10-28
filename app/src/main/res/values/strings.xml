@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">God\'s Eye Lite</string>
+
+    <string name="status_loading">Loading cameras…</string>
+    <string name="ion_key_button">ION KEY</string>
+    <string name="ion_key_title">Cesium ion token</string>
+    <string name="ion_key_hint">Paste an ion access token</string>
+    <string name="ion_key_help">Needs the assets:read scope. Add https://appassets.androidplatform.net to the token\'s allowed URLs, or leave this blank to run the keyless globe with no 3D buildings.</string>
+    <string name="save">SAVE</string>
+    <string name="cancel">CANCEL</string>
+    <string name="reload_frame">RELOAD</string>
+    <string name="close">CLOSE</string>
+    <string name="frame_loading">Loading frame…</string>
+    <string name="frame_failed">Could not load this camera frame.</string>
+</resources>

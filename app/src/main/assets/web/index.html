@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"
+    />
+    <title>God's Eye Lite</title>
+
+    <!-- Cesium is loaded from jsDelivr: it is a large library and keeping it out
+         of the APK keeps the app small. Its web workers are created from blob
+         URLs, which is exactly why this page is served from a real https origin
+         by WebViewAssetLoader instead of file://. -->
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/cesium@1.124.0/Build/Cesium/Widgets/widgets.css"
+    />
+    <script>
+      // Must be defined before Cesium.js runs, so it lives here rather than app.js.
+      window.CESIUM_BASE_URL = 'https://cdn.jsdelivr.net/npm/cesium@1.124.0/Build/Cesium/';
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/cesium@1.124.0/Build/Cesium/Cesium.js"></script>
+    <link rel="stylesheet" href="app.css" />
+  </head>
+  <body>
+    <div id="globe"></div>
+
+    <!-- Live camera stills pinned to their position on the globe. Filled by
+         app.js only when the view is close enough for them to mean anything. -->
+    <div id="thumbs"></div>
+
+    <div id="overlay">
+      <!-- #hud fades out while the globe is idle; #credits sits outside it so
+           the camera-data attribution never disappears. -->
+      <div id="hud">
+        <div id="title">GOD'S EYE LITE</div>
+        <div id="packs"></div>
+        <button id="reset">RESET VIEW</button>
+        <div id="hint">Tap a dot to open that camera</div>
+      </div>
+      <!-- Imagery attribution comes from Cesium's own credit line; this names
+           the camera-data providers, whose licences require attribution. -->
+      <div id="credits">
+        Camera data: City of Austin &middot; City of Calgary &middot; WSDOT &middot; TfL
+      </div>
+    </div>
+
+    <div id="boot">Loading globe…</div>
+
+    <script src="app.js"></script>
+  </body>
+</html>

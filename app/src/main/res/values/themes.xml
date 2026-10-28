@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Framework Material theme: keeps the app free of AppCompat/Material
+         dependencies, which keeps the build light. -->
+    <style name="AppTheme" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">#FF07070B</item>
+        <item name="android:colorPrimary">#FF0A0A0F</item>
+        <item name="android:colorPrimaryDark">#FF07070B</item>
+        <item name="android:colorAccent">@color/accent</item>
+        <item name="android:navigationBarColor">#FF07070B</item>
+        <item name="android:statusBarColor">#FF07070B</item>
+    </style>
+</resources>
