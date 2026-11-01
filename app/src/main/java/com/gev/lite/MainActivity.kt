@@ -70,6 +70,10 @@ class MainActivity : Activity() {
     private lateinit var cameraCredit: TextView
 
     private val repository = CctvRepository()
+    private val flights = FlightRepository()
+    private val flightFetchInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
+    private val detailsInFlight: MutableSet<String> =
+        java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<String, Boolean>())
     private val io: ExecutorService = Executors.newFixedThreadPool(4)
     private val main = Handler(Looper.getMainLooper())
 
@@ -250,6 +254,57 @@ class MainActivity : Activity() {
         evaluate("window.GEVLite && GEVLite.setCameras($array)")
     }
 
+    /** Fetches aircraft around the point the globe is looking at and pushes them back. */
+    private fun loadFlights(lat: Double, lon: Double, radiusNm: Double) {
+        if (io.isShutdown) return
+        // One request at a time: a slow response must not stack up behind new ones.
+        if (!flightFetchInFlight.compareAndSet(false, true)) return
+        io.execute {
+            try {
+                val result = flights.fetchAround(lat, lon, radiusNm.toInt())
+                if (result == null) {
+                    evaluate("window.GEVLite && GEVLite.flightsFailed && GEVLite.flightsFailed()")
+                } else {
+                    evaluate("window.GEVLite && GEVLite.setFlights(${flights.toJson(result)})")
+                }
+            } finally {
+                flightFetchInFlight.set(false)
+            }
+        }
+    }
+
+    /** Fetches the photo and route for one tapped plane and pushes each to the globe as it arrives. */
+    private fun loadFlightDetails(hex: String, callsign: String, lat: Double, lon: Double) {
+        // A hex code is 6 hex digits. Anything else never reaches a URL or script.
+        if (io.isShutdown || !Regex("^[0-9a-fA-F]{6}$").matches(hex)) return
+        if (!detailsInFlight.add(hex)) return
+
+        val pending = java.util.concurrent.atomic.AtomicInteger(2)
+        val done: () -> Unit = {
+            if (pending.decrementAndGet() == 0) {
+                detailsInFlight.remove(hex)
+            }
+        }
+        io.execute {
+            try {
+                flights.photoFor(hex)?.let { pushFlightDetail(hex, "photo", it) }
+            } finally {
+                done()
+            }
+        }
+        io.execute {
+            try {
+                flights.routeFor(callsign, lat, lon)?.let { pushFlightDetail(hex, "route", it) }
+            } finally {
+                done()
+            }
+        }
+    }
+
+    private fun pushFlightDetail(hex: String, key: String, value: org.json.JSONObject) {
+        evaluate("window.GEVLite && GEVLite.setFlightDetails('$hex', {$key: $value})")
+    }
+
     /** Sends per-pack labels and required attributions. */
     private fun pushPacks() {
         val array = JSONArray()
@@ -407,6 +462,32 @@ class MainActivity : Activity() {
             // (the nearest enclosing declaration), which posts itself again and
             // spins the main thread forever without ever opening the panel.
             main.post { this@MainActivity.openCamera(id) }
+        }
+
+        @JavascriptInterface
+        fun requestFlights(lat: Double, lon: Double, radiusNm: Double) {
+            loadFlights(lat, lon, radiusNm)
+        }
+
+        @JavascriptInterface
+        fun requestFlightDetails(hex: String, callsign: String, lat: Double, lon: Double) {
+            loadFlightDetails(hex, callsign, lat, lon)
+        }
+
+        /** Opens a Planespotters photo page in the browser. Anything else is ignored. */
+        @JavascriptInterface
+        fun openLink(url: String) {
+            val uri = android.net.Uri.parse(url)
+            val host = uri.host.orEmpty()
+            val allowed = host == "planespotters.net" || host.endsWith(".planespotters.net")
+            if (uri.scheme != "https" || !allowed) return
+            this@MainActivity.runOnUiThread {
+                runCatching {
+                    this@MainActivity.startActivity(
+                        android.content.Intent(android.content.Intent.ACTION_VIEW, uri),
+                    )
+                }
+            }
         }
 
         @JavascriptInterface

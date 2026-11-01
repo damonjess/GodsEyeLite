@@ -667,6 +667,9 @@
     resetView() {
       if (state.viewer) state.viewer.camera.flyTo(HOME_VIEW);
     },
+    getViewer() {
+      return state.viewer;
+    },
     /**
      * Fly to a point. Not used by the UI — it is the hook the device test does
      * its screenshot checks through, where dragging the globe is impractical.
