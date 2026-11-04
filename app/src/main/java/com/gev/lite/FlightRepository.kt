@@ -42,18 +42,15 @@ internal class FlightRepository {
     companion object {
         private const val TAG = "FlightRepository"
         private const val TIMEOUT_MS = 8_000
-        private const val MAX_RADIUS_NM = 250
+        private const val MAX_RADIUS_NM = 400
         private const val MIN_RADIUS_NM = 5
-        private const val MAX_FLIGHTS = 800
+        private const val MAX_FLIGHTS = 1200
 
         private const val FT_TO_M = 0.3048
         private const val KT_TO_MS = 0.514444
         private const val FPM_TO_MS = 0.00508
 
-        private val ENDPOINTS = listOf(
-            "https://api.adsb.lol/v2/point/%s/%s/%d",
-            "https://api.adsb.one/v2/point/%s/%s/%d",
-        )
+        private const val ADSB_LOL_URL = "https://api.adsb.lol/v2/point/%s/%s/%d"
 
         private const val PHOTO_URL = "https://api.planespotters.net/pub/photos/hex/%s"
         private val ROUTE_ENDPOINTS = listOf(
@@ -105,15 +102,82 @@ internal class FlightRepository {
         val latText = String.format(Locale.US, "%.4f", lat)
         val lonText = String.format(Locale.US, "%.4f", lon)
 
-        for (template in ENDPOINTS) {
-            val url = String.format(Locale.US, template, latText, lonText, radius)
-            val body = httpGet(url) ?: continue
+        // Primary: adsb.lol (retry up to 2 times)
+        val adsbUrl = String.format(Locale.US, ADSB_LOL_URL, latText, lonText, radius)
+        for (attempt in 1..2) {
+            val body = httpGet(adsbUrl) ?: continue
             val parsed = runCatching { parse(body) }
-                .onFailure { android.util.Log.w(TAG, "parse failed for $url: ${it.message}") }
-                .getOrNull() ?: continue
-            return parsed
+                .onFailure { android.util.Log.w(TAG, "parse failed for $adsbUrl: ${it.message}") }
+                .getOrNull()
+            if (!parsed.isNullOrEmpty()) return parsed
         }
-        return null
+
+        // Fallback: OpenSky Network bounding box
+        val deltaLat = radius / 60.0
+        val cosLat = Math.cos(Math.toRadians(lat)).coerceAtLeast(0.1)
+        val deltaLon = radius / (60.0 * cosLat)
+        val lamin = String.format(Locale.US, "%.4f", lat - deltaLat)
+        val lamax = String.format(Locale.US, "%.4f", lat + deltaLat)
+        val lomin = String.format(Locale.US, "%.4f", lon - deltaLon)
+        val lomax = String.format(Locale.US, "%.4f", lon + deltaLon)
+        val openSkyUrl = "https://opensky-network.org/api/states/all?lamin=$lamin&lamax=$lamax&lomin=$lomin&lomax=$lomax"
+
+        val openSkyBody = httpGet(openSkyUrl) ?: return null
+        return runCatching { parseOpenSky(openSkyBody) }
+            .onFailure { android.util.Log.w(TAG, "parseOpenSky failed for $openSkyUrl: ${it.message}") }
+            .getOrNull()
+    }
+
+    /**
+     * Parses an OpenSky Network response.
+     */
+    internal fun parseOpenSky(body: String): List<Flight> {
+        val root = JSONObject(body)
+        val states = root.optJSONArray("states") ?: return emptyList()
+        val out = ArrayList<Flight>(minOf(states.length(), MAX_FLIGHTS))
+
+        for (i in 0 until states.length()) {
+            if (out.size >= MAX_FLIGHTS) break
+            val state = states.optJSONArray(i) ?: continue
+            if (state.length() < 12) continue
+
+            val hex = state.optString(0, "").trim().lowercase(Locale.US)
+            if (hex.isEmpty()) continue
+
+            val lon = state.optDouble(5, Double.NaN)
+            val lat = state.optDouble(6, Double.NaN)
+            if (lat.isNaN() || lon.isNaN()) continue
+
+            val onGround = state.optBoolean(8, false)
+            if (onGround) continue
+
+            val altBaro = state.optDouble(7, Double.NaN)
+            val altGeo = state.optDouble(13, Double.NaN)
+            val altitudeM = when {
+                !altGeo.isNaN() && altGeo >= 0 -> altGeo
+                !altBaro.isNaN() && altBaro >= 0 -> altBaro
+                else -> continue
+            }
+
+            val speedMs = state.optDouble(9, 0.0).takeIf { !it.isNaN() } ?: 0.0
+            val trackDeg = state.optDouble(10, 0.0).takeIf { !it.isNaN() } ?: 0.0
+            val climbMs = state.optDouble(11, 0.0).takeIf { !it.isNaN() } ?: 0.0
+
+            out += Flight(
+                hex = hex,
+                callsign = state.optString(1, "").trim(),
+                registration = "",
+                type = "",
+                lat = lat,
+                lon = lon,
+                altitudeM = altitudeM,
+                speedMs = speedMs,
+                trackDeg = trackDeg,
+                climbMs = climbMs,
+                military = false,
+            )
+        }
+        return out
     }
 
     /**

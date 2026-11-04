@@ -28,10 +28,10 @@
     minGapMs: 4_000,
     moveDebounceMs: 800,
     // Above this camera height a query would cover most of a continent and the
-    // aggregator caps radius at 250 nm anyway, so ask the user to zoom in.
-    maxViewHeightM: 1_500_000,
+    // aggregator caps radius at 400 nm anyway, so ask the user to zoom in.
+    maxViewHeightM: 6_000_000,
     minRadiusNm: 30,
-    maxRadiusNm: 250,
+    maxRadiusNm: 400,
     maxDeadReckonS: 30,
     stepMs: 200,
     trailMax: 60,
@@ -45,8 +45,8 @@
     // whichever planes are nearest the camera, so cost stays flat however many
     // aircraft are in range.
     modelUrl: 'plane.glb',
-    modelMax: 20,
-    modelRangeM: 30_000,
+    modelMax: 50,
+    modelRangeM: 100_000,
     modelMinPixels: 40,
     // plane.glb faces +Z (glTF's front). Cesium renders that along the local
     // east axis at heading 0, hence -90 degrees. If planes fly sideways or
@@ -672,7 +672,13 @@
     if (!api || typeof api.requestFlights !== 'function') return;
 
     const now = performance.now();
-    if (!force && now - state.lastReqMs < CFG.minGapMs) return;
+    if (now - state.lastReqMs < CFG.minGapMs) {
+      if (force) {
+        clearTimeout(state.moveTimer);
+        state.moveTimer = setTimeout(() => request(true), CFG.minGapMs - (now - state.lastReqMs));
+      }
+      return;
+    }
 
     const view = viewCenter();
     if (view.heightM > CFG.maxViewHeightM) {
@@ -802,14 +808,15 @@
       Cesium.Model.fromGltfAsync({
         url: CFG.modelUrl,
         show: false,
-        scale: 1,
-        minimumPixelSize: CFG.modelMinPixels,
+        scale: 3,
+        minimumPixelSize: 64,
         // Keep the model's own livery (white fuselage, red tail, grey engines, dark cockpit)
         // without tinting it by altitude colour.
         colorBlendMode: Cesium.ColorBlendMode.MIX,
         colorBlendAmount: 0.0,
         // Lit like a daytime photo rather than by the globe's sun position.
-        lightColor: new Cesium.Cartesian3(2.2, 2.2, 2.2),
+        // Increased from 2.2 to 7.0 so the model is not underexposed/black.
+        lightColor: new Cesium.Cartesian3(7.0, 7.0, 7.0),
       })
         .then((model) => {
           if (!state.viewer) return;
@@ -892,7 +899,7 @@
         Cesium.Transforms.eastNorthUpToFixedFrame,
         modelMatrix,
       );
-      entry.model.modelMatrix = modelMatrix;
+      entry.model.modelMatrix = Cesium.Matrix4.clone(modelMatrix);
     }
   }
 
@@ -1240,8 +1247,6 @@
       if (!state.enabled || state.byHex.size === 0) return;
       const now = performance.now();
       updateModels(now);
-      if (now - state.lastStepMs < CFG.stepMs) return;
-      state.lastStepMs = now;
       stepPositions(now);
     });
 

@@ -77,6 +77,9 @@ class MainActivity : Activity() {
     private val io: ExecutorService = Executors.newFixedThreadPool(4)
     private val main = Handler(Looper.getMainLooper())
 
+    private var geoCallback: android.webkit.GeolocationPermissions.Callback? = null
+    private var geoOrigin: String? = null
+
     /** Cameras by id, so a tap in the globe can be resolved back to a frame URL. */
     private val cameras = LinkedHashMap<String, CctvCamera>()
     private var selected: CctvCamera? = null
@@ -175,6 +178,36 @@ class MainActivity : Activity() {
                 // covers the case where Cesium says hello first.
                 pushToken()
                 if (cameras.isNotEmpty()) pushCameras()
+            }
+        }
+
+        webView.webChromeClient = object : android.webkit.WebChromeClient() {
+            override fun onGeolocationPermissionsShowPrompt(
+                origin: String,
+                callback: android.webkit.GeolocationPermissions.Callback
+            ) {
+                val hasFine = androidx.core.content.ContextCompat.checkSelfPermission(
+                    this@MainActivity,
+                    android.Manifest.permission.ACCESS_FINE_LOCATION
+                ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                val hasCoarse = androidx.core.content.ContextCompat.checkSelfPermission(
+                    this@MainActivity,
+                    android.Manifest.permission.ACCESS_COARSE_LOCATION
+                ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                if (hasFine || hasCoarse) {
+                    callback.invoke(origin, true, false)
+                } else {
+                    geoCallback = callback
+                    geoOrigin = origin
+                    androidx.core.app.ActivityCompat.requestPermissions(
+                        this@MainActivity,
+                        arrayOf(
+                            android.Manifest.permission.ACCESS_FINE_LOCATION,
+                            android.Manifest.permission.ACCESS_COARSE_LOCATION
+                        ),
+                        101
+                    )
+                }
             }
         }
 
@@ -506,6 +539,21 @@ class MainActivity : Activity() {
                 selected = null
             }
             else -> super.onBackPressed()
+        }
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        if (requestCode == 101) {
+            val granted = grantResults.isNotEmpty() && grantResults[0] == android.content.pm.PackageManager.PERMISSION_GRANTED
+            geoCallback?.invoke(geoOrigin, granted, false)
+            geoCallback = null
+            geoOrigin = null
+        } else {
+            super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         }
     }
 

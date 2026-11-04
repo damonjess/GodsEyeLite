@@ -43,4 +43,6 @@ dependencies {
     // instead of file://, which is what lets Cesium's blob-backed web workers run
     // and gives the page a stable, secure origin.
     implementation("androidx.webkit:webkit:1.12.1")
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
 }

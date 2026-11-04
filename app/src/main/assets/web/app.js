@@ -665,7 +665,25 @@
       log('cameras: ' + state.cameras.length);
     },
     resetView() {
-      if (state.viewer) state.viewer.camera.flyTo(HOME_VIEW);
+      if (!state.viewer) return;
+      const camera = state.viewer.camera;
+      const p = camera.pitch;
+      const h = camera.heading;
+      const tilted = Math.abs(p - (-Math.PI / 2)) > 0.01;
+      const rotated = Math.abs(h) > 0.01 && Math.abs(h - 2 * Math.PI) > 0.01;
+      if (tilted || rotated) {
+        camera.flyTo({
+          destination: camera.positionWC,
+          orientation: {
+            heading: 0,
+            pitch: -Math.PI / 2,
+            roll: 0
+          },
+          duration: 1.0
+        });
+      } else {
+        camera.flyTo(HOME_VIEW);
+      }
     },
     getViewer() {
       return state.viewer;
@@ -710,6 +728,38 @@
 
   const resetButton = document.getElementById('reset');
   if (resetButton) resetButton.addEventListener('click', () => window.GEVLite.resetView());
+
+  const locateButton = document.getElementById('locate');
+  if (locateButton) {
+    locateButton.addEventListener('click', () => {
+      if (!navigator.geolocation) {
+        log('geolocation not supported by browser');
+        return;
+      }
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          if (!state.viewer) return;
+          state.viewer.camera.flyTo({
+            destination: Cesium.Cartesian3.fromDegrees(
+              pos.coords.longitude,
+              pos.coords.latitude,
+              4000 // A nice height to see the local area
+            ),
+            orientation: {
+              heading: 0.0,
+              pitch: -Math.PI / 2.0,
+              roll: 0.0
+            },
+            duration: 1.5
+          });
+        },
+        (err) => {
+          log('geolocation error: ' + err.message);
+        },
+        { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
+      );
+    });
+  }
 
   window.addEventListener('error', (event) => log('js error: ' + event.message));
 
