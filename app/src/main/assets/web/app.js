@@ -161,7 +161,10 @@
     // Cesium's stock zoom is slow at planetary scale: measured on a phone, one
     // pinch from 12,000 km only reached ~3,900 km, so a city took a dozen
     // pinches. At 10 the same pinch reaches ~1,100 km, i.e. about three to a
-    // street — still fine-grained enough to control.
+    // street — still fine-grained enough to control. Scaling this down near the
+    // ground was tried and made zoom feel sluggish everywhere, so the fast
+    // factor is deliberate; tilting is kept usable by letting the plane card
+    // pass touches through instead.
     viewer.scene.screenSpaceCameraController.zoomFactor = 10;
     viewer.camera.setView(HOME_VIEW);
 

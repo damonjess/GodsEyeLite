@@ -158,12 +158,20 @@
   };
   const typeName = (code) => TYPES[code] || code || '';
 
-  /** FL for high altitudes, feet below that. */
+  /** FL for high altitudes, feet below that. Compact: used by the on-globe tags. */
   function altText(meters) {
     const ft = meters / FT;
     return ft >= 10000
       ? 'FL' + String(Math.round(ft / 100)).padStart(3, '0')
       : (Math.round(ft / 100) * 100).toLocaleString() + ' ft';
+  }
+
+  /**
+   * Altitude for the info card. Tags can afford the compact "FL362" reading,
+   * but in the card that looks like a truncated number, so spell it out.
+   */
+  function altFeetText(meters) {
+    return Math.round(meters / FT).toLocaleString() + ' ft';
   }
 
   function greatCircleM(lat1, lon1, lat2, lon2) {
@@ -544,11 +552,14 @@
       #flightsToggle { pointer-events: auto; margin-top: 8px; margin-right: 6px; }
       #flightCard {
         position: absolute; left: 12px; right: 12px; bottom: 34px; max-width: 440px;
-        display: none; z-index: 5; pointer-events: auto;
+        display: none; z-index: 5; pointer-events: none;
         background: rgba(10, 12, 18, 0.92); border: 1px solid #35404f; border-left: 4px solid #35404f;
         border-radius: 10px; padding: 10px 12px; color: #e8e8f0;
         font-family: monospace; font-size: 11px;
       }
+      /* Only the two real controls take touches: the panel must never become a
+         dead zone where a two-finger tilt cannot start. */
+      #flightCard .fc-close, #flightCard .fc-photo { pointer-events: auto; }
       #flightCard .fc-main { display: flex; gap: 10px; align-items: flex-start; }
       #flightCard .fc-text { flex: 1; min-width: 0; }
       #flightCard .fc-head { display: flex; align-items: baseline; gap: 8px; }
@@ -582,8 +593,20 @@
     toggle.className = 'chip on';
     toggle.addEventListener('click', () => setEnabled(!state.enabled));
     if (hud) {
+      // #reset lives inside its own flex row in index.html, not directly under
+      // #hud. Passing it straight to insertBefore() throws NotFoundError (the
+      // node is not a child of #hud), which aborted start() before the poll
+      // timer, the camera listener and the first fetch were wired — so the
+      // layer never requested or drew a single aircraft. Anchor on the row that
+      // actually contains #reset instead.
       const reset = document.getElementById('reset');
-      hud.insertBefore(toggle, reset || null);
+      let anchor = null;
+      if (reset) {
+        let node = reset;
+        while (node.parentElement && node.parentElement !== hud) node = node.parentElement;
+        if (node.parentElement === hud) anchor = node;
+      }
+      hud.insertBefore(toggle, anchor);
     } else {
       document.body.appendChild(toggle);
     }
@@ -1156,7 +1179,7 @@
     set('fcSub', [rec.reg, typeName(rec.type)].filter(Boolean).join(' \u00b7 ') || rec.hex.toUpperCase());
     state.ui.card.style.borderLeftColor = rec.airline ? rec.airline.c : '#35404f';
 
-    set('fcAlt', altText(rec.now.alt));
+    set('fcAlt', altFeetText(rec.now.alt));
     set('fcSpd', Math.round(rec.speedMs / KT) + ' kts');
     set('fcHdg', Math.round(rec.track) + '\u00b0');
     const fpm = Math.round(rec.climb / 0.00508 / 50) * 50;
@@ -1247,6 +1270,13 @@
       if (!state.enabled || state.byHex.size === 0) return;
       const now = performance.now();
       updateModels(now);
+      // Ranking every aircraft, rewriting tags and refreshing the card is
+      // expensive, and preRender fires at display rate. Doing all of it every
+      // frame was what made the globe stutter; 5 Hz is invisible for a feed
+      // that only polls every 10 s. The 3D models above still get their
+      // matrices every frame, so they keep moving smoothly.
+      if (now - state.lastStepMs < CFG.stepMs) return;
+      state.lastStepMs = now;
       stepPositions(now);
     });
 
