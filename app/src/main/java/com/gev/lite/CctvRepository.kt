@@ -184,7 +184,10 @@ class CctvRepository(private val userAgent: String = "gods-eye-lite/0.1 (Android
                 label = "California",
                 credit = "California Department of Transportation (Caltrans) CCTV",
                 url = CALTRANS_URLS.first(),
-                cap = 2300,
+                // All in-service rows, live and still-only. The old cap matched
+                // the live-only count, so raising it keeps roughly 1,100
+                // still-only cameras that would otherwise be silently dropped.
+                cap = 3500,
                 parse = ::parseCaltrans,
                 extraUrls = CALTRANS_URLS.drop(1),
             ),
@@ -454,15 +457,43 @@ class CctvRepository(private val userAgent: String = "gods-eye-lite/0.1 (Android
                 val still = imageData.optJSONObject("static")
                     ?.optString("currentImageURL")
                     ?.takeIf { it.startsWith("https://cwwp2.dot.ca.gov/") }
-                    ?: continue
+                    .orEmpty()
+                // Most rows publish live HLS; the rest are still-only. Keeping
+                // both means a stream failure can fall back to the snapshot
+                // instead of turning the camera into a dead card.
+                val video = caltransStream(imageData.optString("streamingVideoURL"))
+                if (still.isBlank() && video == null) continue
                 val index = cctv.optString("index").ifBlank { "${i + 1}" }
                 val district = location.optString("district").trim()
                 val id = if (district.isBlank()) "row-${i + 1}" else "D$district:$index"
                 val name = location.optString("locationName").trim()
                     .ifBlank { "Caltrans camera $id" }
-                out += RawCamera("california:$id", name, lat, lon, still, null)
+                out += RawCamera("california:$id", name, lat, lon, still, video)
             }
             return out
+        }
+
+        /**
+         * Normalizes a Caltrans stream URL.
+         *
+         * The catalog is hand-maintained: a few rows spell the scheme as
+         * `ttps://`, spell out the default `:443`, or use plain http. They all
+         * mean the same HTTPS endpoint, and dropping them as "not https" is
+         * how those live cameras quietly became stills.
+         */
+        internal fun caltransStream(raw: String): String? {
+            val host = "wzmedia.dot.ca.gov"
+            val start = raw.indexOf(host)
+            if (start < 0) return null
+            // A few rows spell the default port explicitly (host:443/path), so
+            // strip it before requiring the path. The scheme itself is dropped:
+            // `http` and the `ttps` typo both mean the same HTTPS endpoint.
+            val path = raw.substring(start + host.length)
+                .removePrefix(":443")
+                .trimStart('/')
+                .trim()
+            if (path.isBlank() || !path.contains('/')) return null
+            return "https://wzmedia.dot.ca.gov/$path"
         }
 
         /** Reads a simple text element from one XML fragment, decoding entities. */

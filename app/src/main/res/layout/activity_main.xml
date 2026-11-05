@@ -131,24 +131,29 @@
             android:padding="12dp"
             android:visibility="gone">
 
-            <!-- TfL jamcams publish a short clip, so the panel can show either a
-                 still or video in the same slot: exactly one is visible.
-                 No android:background here: TextureView throws on inflation if it
-                 is given a background drawable. The panel's own opaque fill shows
-                 through instead. -->
-            <TextureView
-                android:id="@+id/frameVideo"
+            <!-- One media slot: the still sits under the video as a poster, so
+                 a slow HLS handshake shows the publisher's frame instead of a
+                 black box, and a stream failure simply reveals it again.
+                 No android:background on the TextureView: it throws on inflation
+                 if given a background drawable. -->
+            <FrameLayout
                 android:layout_width="match_parent"
-                android:layout_height="240dp"
-                android:visibility="gone" />
+                android:layout_height="240dp">
 
-            <ImageView
-                android:id="@+id/frameImage"
-                android:layout_width="match_parent"
-                android:layout_height="240dp"
-                android:background="#FF12121A"
-                android:contentDescription="@string/frame_loading"
-                android:scaleType="fitCenter" />
+                <ImageView
+                    android:id="@+id/frameImage"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:background="#FF12121A"
+                    android:contentDescription="@string/frame_loading"
+                    android:scaleType="fitCenter" />
+
+                <TextureView
+                    android:id="@+id/frameVideo"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:visibility="gone" />
+            </FrameLayout>
 
             <TextView
                 android:id="@+id/cameraTitle"

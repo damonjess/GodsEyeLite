@@ -57,6 +57,18 @@ class MainActivity : Activity() {
             "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) " +
                 "Chrome/126 Mobile Safari/537.36"
 
+        /** How often an open snapshot panel re-fetches its frame. */
+        const val STILL_REFRESH_MS = 10_000L
+
+        /**
+         * Caltrans' HLS host can take half a minute to answer a playlist, which
+         * is why the stream looks dead at the default couple of seconds. The
+         * panel shows the still underneath while this is happening.
+         */
+        const val CALTRANS_CONNECT_TIMEOUT_MS = 20_000
+        const val CALTRANS_READ_TIMEOUT_MS = 30_000
+        const val CALTRANS_CLIP_TIMEOUT_MS = 40_000L
+
         /**
          * Served by WebViewAssetLoader. A real https origin (rather than
          * file://) is what gives the page a secure, stable origin, so Cesium's
@@ -95,6 +107,7 @@ class MainActivity : Activity() {
     private var selected: CctvCamera? = null
     private var globeReady = false
     private var clipPlayer: ExoPlayer? = null
+    private var stillRefresh: Runnable? = null
 
     private val prefs by lazy { getSharedPreferences(PREFS, MODE_PRIVATE) }
 
@@ -228,6 +241,7 @@ class MainActivity : Activity() {
         }
         findViewById<Button>(R.id.closeFrame).setOnClickListener {
             cameraPanel.visibility = View.GONE
+            clearStillRefresh()
             stopClip()
             selected = null
         }
@@ -390,20 +404,27 @@ class MainActivity : Activity() {
 
     /** Shows the clip when the feed publishes one, otherwise the still. */
     private fun showMedia(camera: CctvCamera) {
+        stopClip()
+        clearStillRefresh()
+        frameImage.setImageDrawable(null)
         val clip = camera.videoUrl
         if (clip == null) {
-            stopClip()
             frameVideo.visibility = View.GONE
             frameImage.visibility = View.VISIBLE
-            frameImage.setImageDrawable(null)
             loadFrame(camera)
             return
         }
 
-        stopClip()
-        frameImage.setImageDrawable(null)
-        frameImage.visibility = View.GONE
-        frameVideo.visibility = View.VISIBLE
+        // Keep the publisher's still under the video while the stream negotiates.
+        // Caltrans' HLS host can take half a minute to answer, and a black panel
+        // in the meantime looked like the camera was dead.
+        frameVideo.visibility = View.GONE
+        if (camera.imageUrl.isNotBlank()) {
+            frameImage.visibility = View.VISIBLE
+            loadFrame(camera)
+        } else {
+            frameImage.visibility = View.GONE
+        }
         playClip(clip, camera)
     }
 
@@ -430,6 +451,8 @@ class MainActivity : Activity() {
     private fun startClip(url: String, camera: CctvCamera) {
         val player = ExoPlayer.Builder(this).build()
         clipPlayer = player
+        val isCaltrans = url.startsWith("https://wzmedia.dot.ca.gov/")
+        val fallbackDelay = if (isCaltrans) CALTRANS_CLIP_TIMEOUT_MS else 6_000L
         val timeoutRunnable = Runnable {
             if (clipPlayer == player && selected?.id == camera.id && !player.isPlaying && player.playbackState != Player.STATE_READY) {
                 Log.w(TAG, "clip playback timed out, falling back to still image")
@@ -445,6 +468,9 @@ class MainActivity : Activity() {
                     if (playbackState == Player.STATE_READY && selected?.id == camera.id) {
                         main.removeCallbacks(timeoutRunnable)
                         cameraCredit.text = camera.credit
+                        // The still stays as the poster until the first frame
+                        // is decoded, so there is never a black gap.
+                        frameVideo.visibility = View.VISIBLE
                     }
                 }
 
@@ -452,6 +478,14 @@ class MainActivity : Activity() {
                     if (isPlaying && selected?.id == camera.id) {
                         main.removeCallbacks(timeoutRunnable)
                         cameraCredit.text = camera.credit
+                        frameVideo.visibility = View.VISIBLE
+                    }
+                }
+
+                override fun onRenderedFirstFrame() {
+                    if (selected?.id == camera.id) {
+                        clearStillRefresh()
+                        frameImage.visibility = View.GONE
                     }
                 }
 
@@ -463,8 +497,8 @@ class MainActivity : Activity() {
             })
             val http = DefaultHttpDataSource.Factory()
                 .setUserAgent(BROWSER_MEDIA_USER_AGENT)
-                .setConnectTimeoutMs(6_000)
-                .setReadTimeoutMs(6_000)
+                .setConnectTimeoutMs(if (isCaltrans) CALTRANS_CONNECT_TIMEOUT_MS else 6_000)
+                .setReadTimeoutMs(if (isCaltrans) CALTRANS_READ_TIMEOUT_MS else 6_000)
                 .setAllowCrossProtocolRedirects(true)
             if (url.startsWith("https://video.deldot.gov/")) {
                 // Its own map sends a browser identity and referer.
@@ -477,7 +511,7 @@ class MainActivity : Activity() {
             player.setMediaSource(source)
             player.prepare()
             player.playWhenReady = true
-            main.postDelayed(timeoutRunnable, 6_000)
+            main.postDelayed(timeoutRunnable, fallbackDelay)
         } catch (error: Exception) {
             main.removeCallbacks(timeoutRunnable)
             Log.w(TAG, "clip failed: ${error.message}")
@@ -488,6 +522,7 @@ class MainActivity : Activity() {
     /** Falls back to the still image for a feed whose clip will not play. */
     private fun showStill(camera: CctvCamera) {
         releasePlayer()
+        clearStillRefresh()
         frameVideo.visibility = View.GONE
         frameImage.visibility = View.VISIBLE
         // DelDOT publishes no still. Without this guard the fallback tried to
@@ -504,6 +539,12 @@ class MainActivity : Activity() {
         releasePlayer()
     }
 
+    /** Cancels the pending auto-refresh of a snapshot frame. */
+    private fun clearStillRefresh() {
+        stillRefresh?.let { main.removeCallbacks(it) }
+        stillRefresh = null
+    }
+
     private fun releasePlayer() {
         clipPlayer?.let { player ->
             runCatching { player.clearVideoTextureView(frameVideo) }
@@ -513,8 +554,11 @@ class MainActivity : Activity() {
         clipPlayer = null
     }
 
-    private fun loadFrame(camera: CctvCamera) {
-        cameraCredit.text = "${camera.credit}  ·  ${getString(R.string.frame_loading)}"
+    private fun loadFrame(camera: CctvCamera, auto: Boolean = false) {
+        clearStillRefresh()
+        if (!auto) {
+            cameraCredit.text = "${camera.credit}  ·  ${getString(R.string.frame_loading)}"
+        }
         io.execute {
             val bytes = repository.fetchFrame(camera.imageUrl)
             val bitmap = bytes?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }
@@ -523,10 +567,24 @@ class MainActivity : Activity() {
                 if (bitmap != null) {
                     frameImage.setImageBitmap(bitmap)
                     cameraCredit.text = camera.credit
-                } else {
+                } else if (!auto || frameImage.drawable == null) {
+                    // A failed refresh keeps the last good frame on screen.
                     frameImage.setImageDrawable(null)
                     cameraCredit.text = "${camera.credit}  ·  ${getString(R.string.frame_failed)}"
                 }
+
+                val clipPlaying = camera.videoUrl != null && clipPlayer?.isPlaying == true
+                if (cameraPanel.visibility != View.VISIBLE || clipPlaying) return@post
+                // WSDOT, DriveBC and the other snapshot packs publish stills
+                // only. Refreshing while the panel is open is what makes them
+                // a live view instead of one frozen frame.
+                val next = Runnable {
+                    if (!isFinishing && selected?.id == camera.id && cameraPanel.visibility == View.VISIBLE) {
+                        loadFrame(camera, auto = true)
+                    }
+                }
+                stillRefresh = next
+                main.postDelayed(next, STILL_REFRESH_MS)
             }
         }
     }
@@ -595,6 +653,7 @@ class MainActivity : Activity() {
             settingsPanel.visibility == View.VISIBLE -> settingsPanel.visibility = View.GONE
             cameraPanel.visibility == View.VISIBLE -> {
                 cameraPanel.visibility = View.GONE
+                clearStillRefresh()
                 stopClip()
                 selected = null
             }
@@ -620,6 +679,7 @@ class MainActivity : Activity() {
     override fun onPause() {
         super.onPause()
         webView.onPause()
+        clearStillRefresh()
         // Do not keep streaming a clip (or holding the decoder) in the background.
         clipPlayer?.let { player -> runCatching { if (player.isPlaying) player.pause() } }
     }
@@ -628,13 +688,12 @@ class MainActivity : Activity() {
         super.onResume()
         webView.onResume()
         if (cameraPanel.visibility == View.VISIBLE) {
-            selected?.let { camera ->
-                if (camera.videoUrl != null) playClip(camera.videoUrl, camera)
-            }
+            selected?.let { camera -> showMedia(camera) }
         }
     }
 
     override fun onDestroy() {
+        clearStillRefresh()
         stopClip()
         io.shutdownNow()
         (webView.parent as? android.view.ViewGroup)?.removeView(webView)
