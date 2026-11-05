@@ -79,7 +79,9 @@ class MainActivity : Activity() {
 
     private val repository = CctvRepository()
     private val flights = FlightRepository()
+    private val satellites = SatelliteRepository()
     private val flightFetchInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
+    private val satelliteFetchInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
     private val detailsInFlight: MutableSet<String> =
         java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<String, Boolean>())
     private val io: ExecutorService = Executors.newFixedThreadPool(4)
@@ -291,9 +293,34 @@ class MainActivity : Activity() {
                     evaluate("window.GEVLite && GEVLite.flightsFailed && GEVLite.flightsFailed()")
                 } else {
                     evaluate("window.GEVLite && GEVLite.setFlights(${flights.toJson(result)})")
+                    // Push the live planes immediately, then add service tags
+                    // discovered from registration metadata. The lookup is
+                    // cached per helicopter, so later polls do no network work.
+                    val enriched = runCatching { flights.enrichEmergencyServices(result) }
+                        .getOrDefault(result)
+                    if (enriched !== result) {
+                        evaluate("window.GEVLite && GEVLite.setFlights(${flights.toJson(enriched)})")
+                    }
                 }
             } finally {
                 flightFetchInFlight.set(false)
+            }
+        }
+    }
+
+    /** Fetches the TLE catalog once and lets the WebView propagate the orbits locally. */
+    private fun loadSatellites() {
+        if (io.isShutdown || !satelliteFetchInFlight.compareAndSet(false, true)) return
+        io.execute {
+            try {
+                val result = runCatching { satellites.load() }.getOrNull()
+                if (result.isNullOrEmpty()) {
+                    evaluate("window.GEVLite && GEVLite.satellitesFailed && GEVLite.satellitesFailed()")
+                } else {
+                    evaluate("window.GEVLite && GEVLite.setSatellites(${satellites.toJson(result)})")
+                }
+            } finally {
+                satelliteFetchInFlight.set(false)
             }
         }
     }
@@ -498,6 +525,7 @@ class MainActivity : Activity() {
                 pushToken()
                 pushPacks()
                 pushCameras()
+                loadSatellites()
             }
         }
 
@@ -512,6 +540,11 @@ class MainActivity : Activity() {
         @JavascriptInterface
         fun requestFlights(lat: Double, lon: Double, radiusNm: Double) {
             loadFlights(lat, lon, radiusNm)
+        }
+
+        @JavascriptInterface
+        fun requestSatellites() {
+            loadSatellites()
         }
 
         @JavascriptInterface

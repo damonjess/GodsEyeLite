@@ -222,6 +222,7 @@ body {
 
 .layer-seg {
   display: flex;
+  flex-wrap: wrap;
   gap: 4px;
 }
 
@@ -242,6 +243,31 @@ body {
   border-color: #35e0c8;
   background: rgba(53, 224, 200, 0.12);
   color: #e8e8f0;
+}
+
+/* Callsign/registration/type search for the aircraft layer. */
+.layer-search {
+  box-sizing: border-box;
+  width: 100%;
+  margin-top: 5px;
+  padding: 5px 6px;
+  border: 1px solid #35404f;
+  border-radius: 4px;
+  background: #0d1118;
+  color: #e8e8f0;
+  font-family: monospace;
+  font-size: 8.5px;
+  letter-spacing: 0.4px;
+  pointer-events: auto;
+}
+
+.layer-search::placeholder {
+  color: #6a6a80;
+}
+
+.layer-search:focus {
+  outline: none;
+  border-color: #35e0c8;
 }
 
 /* These two lines used to be #6a6a80 straight onto the globe. Measured against

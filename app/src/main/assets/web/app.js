@@ -104,6 +104,7 @@
     camerasOn: true,
     cameraType: 'all', // 'all' | 'still' | 'live'
     planesOn: true,
+    satellitesOn: true,
     ionToken: '',
     tokenApplied: false,
   };
@@ -712,8 +713,10 @@
   function renderLayers() {
     const cameras = document.getElementById('layerCameras');
     const planes = document.getElementById('layerPlanes');
+    const satellites = document.getElementById('layerSatellites');
     if (cameras) cameras.setAttribute('aria-pressed', String(state.camerasOn));
     if (planes) planes.setAttribute('aria-pressed', String(state.planesOn));
+    if (satellites) satellites.setAttribute('aria-pressed', String(state.satellitesOn));
     for (const button of document.querySelectorAll('#layerType button')) {
       button.classList.toggle('on', button.dataset.type === state.cameraType);
     }
@@ -760,6 +763,18 @@
         const api = window.GEVLite;
         if (api && typeof api.setFlightsEnabled === 'function') {
           api.setFlightsEnabled(state.planesOn);
+        }
+      });
+    }
+
+    const satellites = document.getElementById('layerSatellites');
+    if (satellites) {
+      satellites.addEventListener('click', () => {
+        state.satellitesOn = !state.satellitesOn;
+        renderLayers();
+        const api = window.GEVLite;
+        if (api && typeof api.setSatellitesEnabled === 'function') {
+          api.setSatellitesEnabled(state.satellitesOn);
         }
       });
     }
@@ -844,6 +859,7 @@
         hidden: Array.from(state.hidden),
         camerasOn: state.camerasOn,
         cameraType: state.cameraType,
+        satellitesOn: state.satellitesOn,
         liveCameras: state.cameras.filter((camera) => !!camera.videoUrl).length,
         stillCameras: state.cameras.filter((camera) => !camera.videoUrl).length,
         tokenApplied: state.tokenApplied,

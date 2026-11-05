@@ -6,10 +6,11 @@
  *  - Kotlin owns the network (FlightRepository.kt). This file asks for a fetch
  *    around whatever the camera is looking at via GEVAndroid.requestFlights(),
  *    and receives the result in GEVLite.setFlights().
- *  - Planes are drawn at their real altitude (Cesium positions take metres).
- *    Far away they are airliner-shaped icons (a BillboardCollection) tinted by
- *    height: green low -> blue -> violet high. The nearest few, within about
- *    30 km of the camera, swap to a real 3D airliner model (plane.glb).
+ *  - Aircraft are drawn at their real altitude (Cesium positions take metres).
+ *    Far away they are shape-specific icons (a BillboardCollection) tinted by
+ *    height: green low -> blue -> violet high. Near the camera, fixed-wing
+ *    aircraft swap to a 3D airliner model (plane.glb) and helicopters swap to a
+ *    low-poly rotorcraft model (helicopter.glb).
  *  - Between polls each plane is dead-reckoned along its heading, so it glides
  *    instead of jumping every ten seconds.
  *  - The nearest planes get tags: an airline chip plus callsign and altitude.
@@ -41,15 +42,22 @@
     // only, and only when the camera is low enough for them to be readable.
     tagMax: 30,
     tagMaxViewM: 700_000,
-    // 3D model level of detail. A small pool of models is re-assigned to
-    // whichever planes are nearest the camera, so cost stays flat however many
-    // aircraft are in range.
+    // Airports and local traffic matter most below the boundary layer. The LOW
+    // filter uses 5,000 ft, not the 10,000 ft altitude where flight levels start.
+    lowAltitudeM: 1524,
+    // 3D model level of detail. Separate small pools are re-assigned to the
+    // nearest fixed-wing aircraft and helicopters, so cost stays flat however
+    // many aircraft are in range.
     modelUrl: 'plane.glb',
     modelMax: 50,
     modelRangeM: 100_000,
-    modelMinPixels: 40,
-    // plane.glb faces +Z (glTF's front). Cesium renders that along the local
-    // east axis at heading 0, hence -90 degrees. If planes fly sideways or
+    modelMinPixels: 64,
+    heliModelUrl: 'helicopter.glb',
+    heliModelMax: 20,
+    heliModelRangeM: 100_000,
+    heliModelMinPixels: 80,
+    // Both models face +Z (glTF's front). Cesium renders that along the local
+    // east axis at heading 0, hence -90 degrees. If aircraft fly sideways or
     // backwards on a device, this is the one number to change (try 0, PI/2, PI).
     modelHeadingOffset: -Math.PI / 2,
   };
@@ -61,6 +69,8 @@
   const state = {
     viewer: null,
     enabled: true,
+    filter: 'all', // 'all' | 'watch' | 'heli' | 'low'
+    search: '',
     billboards: null,
     byHex: new Map(),
     selectedHex: null,
@@ -69,6 +79,7 @@
     dropLines: null,
     dropLine: null,
     pool: [],
+    heliPool: [],
     chips: null,
     labels: null,
     details: new Map(),
@@ -130,6 +141,8 @@
     RRR: ['Royal Air Force', 'RAF', '#1b3a6b'],
   };
   const MIL_CHIP = ['Military', 'MIL', '#b3202a'];
+  const MILITARY_BADGE = { n: 'Military', s: 'MIL', c: '#6e7b68' };
+  const EMERGENCY_BADGE = { n: 'Emergency', s: 'EMERG', c: '#d92b2b' };
 
   /** Airline entry {n, s, c} for a callsign like "BAW123", or null. */
   function airlineOf(callsign, military) {
@@ -216,6 +229,29 @@
   const PROP_TYPES = new Set(['DH8D', 'AT72', 'AT76', 'AT45', 'SF34', 'C172', 'PC12']);
   const FIGHTER_TYPES = new Set(['EUFI', 'F35']);
 
+  // Rotorcraft designators cover the common civil and military types, including
+  // the AW169 in the screenshot. ADS-B category A7 is the authoritative signal;
+  // the type list covers feeds that omit the category.
+  const HELI_TYPES = new Set([
+    'A109', 'A119', 'A139', 'A169', 'A189', 'AS32', 'AS33', 'AS50', 'AS55', 'AS65',
+    'AW09', 'AW101', 'AW109', 'AW119', 'AW139', 'AW169', 'AW189', 'EH10',
+    'EC20', 'EC25', 'EC30', 'EC35', 'EC45', 'EC55', 'EC75', 'H90', 'H125', 'H130',
+    'H135', 'H145', 'H155', 'H160', 'H175', 'H215', 'H225', 'NH90',
+    'B06', 'B06T', 'B105', 'B117', 'B206', 'B212', 'B407', 'B412', 'B429', 'B430',
+    'B505', 'B525', 'MD52', 'MD60', 'H369', 'H500',
+    'R22', 'R44', 'R66', 'S61', 'S64', 'S70', 'S76', 'S92',
+    'UH1', 'UH1H', 'UH60', 'H60', 'CH46', 'CH47', 'CH53', 'AH1', 'AH6', 'AH64',
+    'V22', 'CV22', 'MV22', 'MI8', 'MI17', 'MI24', 'MI26', 'KA27', 'KA32', 'LYNX', 'WILDCAT',
+  ]);
+
+  /** True for rotorcraft, using ADS-B's A7 category or a known type code. */
+  function isHelicopter(rec) {
+    const category = String(rec.category || '').trim().toUpperCase();
+    if (category === 'A7' || category === '7') return true;
+    const type = String(rec.type || '').trim().toUpperCase();
+    return HELI_TYPES.has(type);
+  }
+
   function shapeKindOf(type) {
     if (FIGHTER_TYPES.has(type)) return 'fighter';
     if (QUAD_TYPES.has(type)) return 'quad';
@@ -261,8 +297,20 @@
     }
   }
 
-  function makePlaneIcon(kind, accent, selected) {
-    const key = `${kind}:${accent}:${selected ? 1 : 0}`;
+  /** A dashed red ring around emergency aircraft, visible even at icon size. */
+  function drawEmergencyRing(g) {
+    g.save();
+    g.strokeStyle = 'rgba(255, 59, 48, 0.95)';
+    g.lineWidth = 3;
+    g.setLineDash([7, 4]);
+    g.beginPath();
+    g.arc(0, 0, 57, 0, Math.PI * 2);
+    g.stroke();
+    g.restore();
+  }
+
+  function makePlaneIcon(kind, accent, selected, emergency) {
+    const key = `${kind}:${accent}:${selected ? 1 : 0}:${emergency ? 1 : 0}`;
     if (iconCache.has(key)) return iconCache.get(key);
 
     const size = CFG.iconCanvasPx;
@@ -532,15 +580,269 @@
     g.lineTo(0, 49);
     g.stroke();
 
+    if (emergency) drawEmergencyRing(g);
+
+    const url = canvas.toDataURL('image/png');
+    iconCache.set(key, url);
+    return url;
+  }
+
+  function makeHelicopterIcon(accent, selected, emergency) {
+    const key = `heli:${accent}:${selected ? 1 : 0}:${emergency ? 1 : 0}`;
+    if (iconCache.has(key)) return iconCache.get(key);
+
+    const size = CFG.iconCanvasPx;
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const g = canvas.getContext('2d');
+    g.translate(size / 2, size / 2);
+    g.lineJoin = 'round';
+    g.lineCap = 'round';
+
+    if (selected) {
+      const halo = g.createRadialGradient(0, 0, 14, 0, 0, 58);
+      halo.addColorStop(0, 'rgba(53, 224, 200, 0.38)');
+      halo.addColorStop(0.75, 'rgba(53, 224, 200, 0.14)');
+      halo.addColorStop(1, 'rgba(53, 224, 200, 0)');
+      g.fillStyle = halo;
+      g.beginPath();
+      g.arc(0, 0, 58, 0, Math.PI * 2);
+      g.fill();
+    }
+
+    // 1. Main rotor: four blades and a faint disc, behind the fuselage.
+    g.save();
+    g.fillStyle = 'rgba(215, 230, 245, 0.07)';
+    g.beginPath();
+    g.arc(0, -4, 53, 0, Math.PI * 2);
+    g.fill();
+    g.strokeStyle = 'rgba(215, 230, 245, 0.22)';
+    g.lineWidth = 1.2;
+    g.setLineDash([4, 6]);
+    g.beginPath();
+    g.arc(0, -4, 51, 0, Math.PI * 2);
+    g.stroke();
+    g.setLineDash([]);
+    for (const angle of [Math.PI / 4, -Math.PI / 4]) {
+      g.save();
+      g.translate(0, -4);
+      g.rotate(angle);
+      const bladeGrad = g.createLinearGradient(-3, 0, 3, 0);
+      bladeGrad.addColorStop(0, '#111923');
+      bladeGrad.addColorStop(0.5, '#3b4858');
+      bladeGrad.addColorStop(1, '#111923');
+      g.fillStyle = bladeGrad;
+      g.strokeStyle = 'rgba(5, 9, 14, 0.9)';
+      g.lineWidth = 1.2;
+      g.beginPath();
+      if (g.roundRect) g.roundRect(-3.2, -53, 6.4, 106, 3.2);
+      else g.rect(-3.2, -53, 6.4, 106);
+      g.fill();
+      g.stroke();
+      g.strokeStyle = 'rgba(220, 232, 245, 0.42)';
+      g.lineWidth = 0.9;
+      g.beginPath();
+      g.moveTo(-0.7, -49);
+      g.lineTo(-0.7, -7);
+      g.stroke();
+      g.restore();
+    }
+    g.restore();
+
+    // 2. Skids, tailplane and tail rotor are behind the fuselage.
+    g.save();
+    g.strokeStyle = '#1c2632';
+    g.lineWidth = 2.8;
+    for (const s of [-1, 1]) {
+      g.beginPath();
+      g.moveTo(s * 17, -3);
+      g.lineTo(s * 17, 15);
+      g.stroke();
+      g.lineWidth = 1.6;
+      g.beginPath();
+      g.moveTo(s * 17, -1);
+      g.lineTo(s * 9, -5);
+      g.stroke();
+      g.beginPath();
+      g.moveTo(s * 17, 11);
+      g.lineTo(s * 7, 9);
+      g.stroke();
+      g.lineWidth = 2.8;
+    }
+    g.restore();
+
+    g.save();
+    g.fillStyle = '#c5ceda';
+    g.strokeStyle = 'rgba(15, 22, 32, 0.85)';
+    g.lineWidth = 1.1;
+    g.beginPath();
+    g.moveTo(0, 34);
+    g.lineTo(14, 40);
+    g.lineTo(14, 44);
+    g.lineTo(0, 42);
+    g.lineTo(-14, 44);
+    g.lineTo(-14, 40);
+    g.closePath();
+    g.fill();
+    g.stroke();
+    g.restore();
+
+    g.save();
+    g.translate(7, 48);
+    g.strokeStyle = 'rgba(210, 228, 248, 0.35)';
+    g.lineWidth = 0.9;
+    g.beginPath();
+    g.arc(0, 0, 9, 0, Math.PI * 2);
+    g.stroke();
+    g.fillStyle = '#26313e';
+    for (const angle of [0, Math.PI / 2]) {
+      g.save();
+      g.rotate(angle);
+      g.fillRect(-1.1, -9, 2.2, 18);
+      g.restore();
+    }
+    g.restore();
+
+    // 3. Shadow-under-body and fuselage/tail-boom silhouette.
+    const bodyPath = () => {
+      g.beginPath();
+      g.moveTo(0, -38);
+      g.bezierCurveTo(9, -34, 13, -22, 13, -7);
+      g.bezierCurveTo(13, 5, 10, 13, 5, 18);
+      g.lineTo(4, 34);
+      g.lineTo(3.2, 51);
+      g.lineTo(-3.2, 51);
+      g.lineTo(-4, 34);
+      g.lineTo(-5, 18);
+      g.bezierCurveTo(-10, 13, -13, 5, -13, -7);
+      g.bezierCurveTo(-13, -22, -9, -34, 0, -38);
+      g.closePath();
+    };
+    g.save();
+    g.shadowColor = 'rgba(0, 0, 0, 0.7)';
+    g.shadowBlur = 6;
+    g.shadowOffsetY = 2;
+    g.fillStyle = 'rgba(0, 0, 0, 0.38)';
+    bodyPath();
+    g.fill();
+    g.restore();
+
+    const bodyGrad = g.createLinearGradient(-13, 0, 13, 0);
+    bodyGrad.addColorStop(0, '#aeb9c8');
+    bodyGrad.addColorStop(0.2, '#eef2f8');
+    bodyGrad.addColorStop(0.45, '#ffffff');
+    bodyGrad.addColorStop(0.72, '#e3e9f2');
+    bodyGrad.addColorStop(1, '#9aa6b8');
+    bodyPath();
+    g.fillStyle = bodyGrad;
+    g.fill();
+    g.lineWidth = 1.8;
+    g.strokeStyle = 'rgba(15, 22, 32, 0.9)';
+    g.stroke();
+
+    g.strokeStyle = 'rgba(120, 135, 155, 0.42)';
+    g.lineWidth = 0.8;
+    g.beginPath();
+    g.moveTo(0, 17);
+    g.lineTo(0, 42);
+    g.stroke();
+
+    // 4. Tail fin in the aircraft's accent colour.
+    g.fillStyle = accent;
+    g.strokeStyle = 'rgba(15, 20, 28, 0.85)';
+    g.lineWidth = 1.1;
+    g.beginPath();
+    g.moveTo(0, 34);
+    g.lineTo(4.5, 43);
+    g.lineTo(3.0, 52);
+    g.lineTo(0, 54);
+    g.lineTo(-3.0, 52);
+    g.lineTo(-4.5, 43);
+    g.closePath();
+    g.fill();
+    g.stroke();
+    g.strokeStyle = 'rgba(255, 255, 255, 0.62)';
+    g.lineWidth = 0.9;
+    g.beginPath();
+    g.moveTo(0, 37);
+    g.lineTo(0, 51);
+    g.stroke();
+
+    // 5. Cabin windows and door seams.
+    g.fillStyle = '#142333';
+    g.beginPath();
+    g.moveTo(0, -31);
+    g.bezierCurveTo(8, -28, 8, -19, 4, -16);
+    g.lineTo(-4, -16);
+    g.bezierCurveTo(-8, -19, -8, -28, 0, -31);
+    g.closePath();
+    g.fill();
+    g.strokeStyle = 'rgba(190, 215, 240, 0.7)';
+    g.lineWidth = 0.9;
+    g.beginPath();
+    g.moveTo(0, -30);
+    g.lineTo(0, -17);
+    g.stroke();
+    g.beginPath();
+    g.moveTo(-4, -25);
+    g.lineTo(4, -25);
+    g.stroke();
+
+    g.strokeStyle = 'rgba(70, 85, 103, 0.55)';
+    g.lineWidth = 1.0;
+    g.beginPath();
+    g.moveTo(-9, -12);
+    g.lineTo(-9, 12);
+    g.stroke();
+    g.beginPath();
+    g.moveTo(9, -11);
+    g.lineTo(9, 13);
+    g.stroke();
+
+    // 6. Accent chevron on the tail boom.
+    g.fillStyle = accent;
+    g.beginPath();
+    g.moveTo(-3.5, 31);
+    g.lineTo(0, 26);
+    g.lineTo(3.5, 31);
+    g.lineTo(3.5, 35);
+    g.lineTo(0, 30);
+    g.lineTo(-3.5, 35);
+    g.closePath();
+    g.fill();
+
+    // 7. Main-rotor hub, above the fuselage.
+    g.fillStyle = '#17212c';
+    g.strokeStyle = 'rgba(225, 236, 248, 0.65)';
+    g.lineWidth = 1.1;
+    g.beginPath();
+    g.arc(0, -4, 5.2, 0, Math.PI * 2);
+    g.fill();
+    g.stroke();
+    g.fillStyle = '#9aa8ba';
+    g.beginPath();
+    g.arc(0, -4, 2.1, 0, Math.PI * 2);
+    g.fill();
+
+    if (emergency) drawEmergencyRing(g);
+
     const url = canvas.toDataURL('image/png');
     iconCache.set(key, url);
     return url;
   }
 
   function iconFor(rec, selected) {
+    const accent = rec.emergency
+      ? '#ff3b30'
+      : rec.military
+        ? '#6e7b68'
+        : rec.airline
+          ? rec.airline.c
+          : '#d62828';
+    if (isHelicopter(rec)) return makeHelicopterIcon(accent, selected, rec.emergency);
     const kind = rec.military && FIGHTER_TYPES.has(rec.type) ? 'fighter' : shapeKindOf(rec.type);
-    const accent = rec.airline ? rec.airline.c : rec.military ? '#6e7b68' : '#d62828';
-    return makePlaneIcon(kind, accent, selected);
+    return makePlaneIcon(kind, accent, selected, rec.emergency);
   }
 
   // ── UI (injected, so index.html only needs the script tag) ─────────────────
@@ -563,6 +865,7 @@
       #flightCard .fc-head { display: flex; align-items: baseline; gap: 8px; }
       #flightCard .fc-call { font-size: 17px; font-weight: 700; letter-spacing: 1px; }
       #flightCard .fc-mil { color: #ff7a7a; font-weight: 700; }
+      #flightCard .fc-emergency { color: #ff5a4f; font-weight: 700; letter-spacing: 1px; }
       #flightCard .fc-airline { font-size: 12px; margin-top: 1px; }
       #flightCard .fc-sub { color: #9a9ab0; margin-top: 2px; }
       #flightCard .fc-photo { display: none; flex: none; text-align: right; cursor: pointer; }
@@ -593,7 +896,7 @@
     card.innerHTML = `
       <div class="fc-main">
         <div class="fc-text">
-          <div class="fc-head"><span class="fc-call" id="fcCall"></span><span class="fc-mil" id="fcMil"></span></div>
+          <div class="fc-head"><span class="fc-call" id="fcCall"></span><span class="fc-emergency" id="fcEmergency"></span><span class="fc-mil" id="fcMil"></span></div>
           <div class="fc-airline" id="fcAirline"></div>
           <div class="fc-sub" id="fcSub"></div>
         </div>
@@ -629,21 +932,27 @@
     });
 
     const credits = document.getElementById('credits');
-    if (credits) credits.appendChild(document.createTextNode(' \u00b7 Flights: adsb.lol / adsb.one'));
+    if (credits) credits.appendChild(document.createTextNode(' \u00b7 Flights: adsb.lol / adsb.one \u00b7 Metadata: ADSBdb'));
 
+    wireFilterUi();
+    renderFilterUi();
     renderToggle();
   }
 
   function renderToggle() {
     const note = document.getElementById('flightsStatus');
     if (!note) return;
-    const count = state.byHex.size;
+    const total = state.byHex.size;
+    const visible = [...state.byHex.values()].filter((rec) => rec.visible).length;
+    const narrowed = state.filter !== 'all' || !!state.search.trim();
     note.textContent = !state.enabled
       ? 'OFF'
       : state.statusNote
         ? state.statusNote
-        : count
-          ? String(count)
+        : total
+          ? narrowed
+            ? `${visible}/${total}`
+            : String(total)
           : '';
   }
 
@@ -651,6 +960,90 @@
     if (state.statusNote === note) return;
     state.statusNote = note;
     renderToggle();
+  }
+
+  // ── Aircraft filters and search ────────────────────────────────────────────
+
+  function matchesFilter(rec) {
+    switch (state.filter) {
+      case 'watch':
+        return !!rec.military || !!rec.emergency;
+      case 'heli':
+        return !!rec.heli;
+      case 'low':
+        return (rec.altM || 0) <= CFG.lowAltitudeM;
+      default:
+        return true;
+    }
+  }
+
+  function matchesSearch(rec) {
+    const query = state.search.trim().toLowerCase();
+    if (!query) return true;
+    return [rec.callsign, rec.reg, rec.type, rec.hex, rec.emergencyReason]
+      .some((value) => String(value || '').toLowerCase().includes(query));
+  }
+
+  function matches(rec) {
+    return matchesFilter(rec) && matchesSearch(rec);
+  }
+
+  function applyVisibility() {
+    for (const rec of state.byHex.values()) {
+      const visible = matches(rec);
+      rec.visible = visible;
+      if (!visible) {
+        releaseModel(rec.hex);
+        dropTags(rec);
+        rec.bb.show = false;
+        if (state.selectedHex === rec.hex) clearSelection();
+      } else {
+        rec.bb.show = true;
+      }
+    }
+    renderFilterUi();
+    renderToggle();
+  }
+
+  function refreshFilterView() {
+    applyVisibility();
+    if (state.viewer) stepPositions(performance.now());
+  }
+
+  function setFilter(filter) {
+    if (!['all', 'watch', 'heli', 'low'].includes(filter)) return;
+    state.filter = filter;
+    refreshFilterView();
+  }
+
+  function setSearch(text) {
+    state.search = String(text || '');
+    refreshFilterView();
+  }
+
+  function renderFilterUi() {
+    for (const button of document.querySelectorAll('#flightFilter button')) {
+      const active = button.dataset.filter === state.filter;
+      button.classList.toggle('on', active);
+      button.setAttribute('aria-pressed', String(active));
+    }
+    const search = document.getElementById('flightSearch');
+    if (search && search.value !== state.search) search.value = state.search;
+  }
+
+  function wireFilterUi() {
+    const group = document.getElementById('flightFilter');
+    if (!group) return;
+    for (const button of group.querySelectorAll('button')) {
+      button.addEventListener('click', () => setFilter(button.dataset.filter));
+    }
+    const search = document.getElementById('flightSearch');
+    if (!search) return;
+    let timer = 0;
+    search.addEventListener('input', () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => setSearch(search.value), 120);
+    });
   }
 
   // ── Requesting data ────────────────────────────────────────────────────────
@@ -716,6 +1109,9 @@
       if (!rec) {
         rec = {
           hex: f.h,
+          visible: true,
+          emergency: false,
+          emergencyReason: '',
           trail: [],
           bb: state.billboards.add({
             position: Cesium.Cartesian3.fromDegrees(f.lo, f.la, f.a || 0),
@@ -731,7 +1127,11 @@
       rec.callsign = f.c || f.h.toUpperCase();
       rec.reg = f.r || '';
       rec.type = f.t || '';
+      rec.category = f.g || '';
       rec.military = !!f.m;
+      rec.emergency = !!f.e;
+      rec.emergencyReason = f.q || '';
+      rec.heli = isHelicopter(rec);
       rec.airline = airlineOf(rec.callsign, rec.military);
       rec.lat = f.la;
       rec.lon = f.lo;
@@ -759,6 +1159,7 @@
       if (state.selectedHex === hex) clearSelection();
     }
 
+    applyVisibility();
     stepPositions(now);
     if (state.selectedHex) rebuildTrail();
     renderToggle();
@@ -779,25 +1180,16 @@
     const lat = rec.lat + ((dist * Math.cos(trk)) / EARTH_R) * (180 / Math.PI);
     const lon = rec.lon + ((dist * Math.sin(trk)) / (EARTH_R * cosLat)) * (180 / Math.PI);
     const alt = Math.max(rec.altM + rec.climb * dt, 0);
-    rec.now = { lat, lon, alt };
+    if (!rec.now) rec.now = { lat, lon, alt };
+    else { rec.now.lat = lat; rec.now.lon = lon; rec.now.alt = alt; }
     rec.cart = Cesium.Cartesian3.fromDegrees(lon, lat, alt, Cesium.Ellipsoid.WGS84, rec.cart);
     return trk;
   }
 
   function stepPositions(now) {
-    const heading = state.viewer.camera.heading;
-    for (const rec of state.byHex.values()) {
-      const trk = advance(rec, now);
-      rec.bb.position = rec.cart;
-      // Billboard rotation is counter-clockwise on screen. A plane with track
-      // T on a map whose top points along camera heading H appears turned
-      // (T - H) clockwise, so the rotation is H - T.
-      rec.bb.rotation = heading - trk;
-    }
     const ranked = rankByDistance();
     assignModels(ranked);
     assignTags(ranked);
-    updateDropLine();
     updateCard();
   }
 
@@ -806,14 +1198,14 @@
   const hpr = new Cesium.HeadingPitchRoll();
   const modelMatrix = new Cesium.Matrix4();
 
-  function initModelPool() {
-    for (let i = 0; i < CFG.modelMax; i++) {
+  function loadModelPool(pool, url, count, scale, minimumPixelSize, label) {
+    for (let i = 0; i < count; i++) {
       Cesium.Model.fromGltfAsync({
-        url: CFG.modelUrl,
+        url,
         show: false,
-        scale: 3,
-        minimumPixelSize: 64,
-        // Keep the model's own livery (white fuselage, red tail, grey engines, dark cockpit)
+        scale,
+        minimumPixelSize,
+        // Keep each model's own livery (white/red helicopter, white airliner)
         // without tinting it by altitude colour.
         colorBlendMode: Cesium.ColorBlendMode.MIX,
         colorBlendAmount: 0.0,
@@ -824,39 +1216,44 @@
         .then((model) => {
           if (!state.viewer) return;
           state.viewer.scene.primitives.add(model);
-          state.pool.push({ model, hex: null });
+          pool.push({ model, hex: null });
         })
         .catch((error) => {
-          if (i === 0) log('3D model unavailable, using icons only: ' + (error && error.message));
+          if (i === 0) log(`${label} 3D model unavailable, using icons only: ` + (error && error.message));
         });
     }
+  }
+
+  function initModelPool() {
+    loadModelPool(state.pool, CFG.modelUrl, CFG.modelMax, 3, CFG.modelMinPixels, 'plane');
+    loadModelPool(state.heliPool, CFG.heliModelUrl, CFG.heliModelMax, 3, CFG.heliModelMinPixels, 'helicopter');
   }
 
   function rankByDistance() {
     const camera = state.viewer.camera.positionWC;
     const ranked = [];
     for (const rec of state.byHex.values()) {
-      if (!rec.cart) continue;
+      if (!rec.visible || !rec.cart) continue;
       ranked.push({ rec, d: Cesium.Cartesian3.distance(camera, rec.cart) });
     }
     ranked.sort((a, b) => a.d - b.d);
     return ranked;
   }
 
-  /** Gives the pool's models to the planes nearest the camera. */
-  function assignModels(ranked) {
-    if (!state.pool.length) return;
-    const near = ranked.filter((n) => n.d <= CFG.modelRangeM);
-    const want = new Set(near.slice(0, state.pool.length).map((n) => n.rec.hex));
+  /** Gives a pool's models to the closest matching aircraft. */
+  function assignModelsToPool(pool, ranked, matching, rangeM) {
+    if (!pool.length) return;
+    const near = ranked.filter((n) => matching(n.rec) && n.d <= rangeM);
+    const want = new Set(near.slice(0, pool.length).map((n) => n.rec.hex));
 
-    // Free models whose plane is no longer among the nearest.
-    for (const entry of state.pool) {
+    // Free models whose aircraft is no longer among the nearest.
+    for (const entry of pool) {
       if (entry.hex && !want.has(entry.hex)) releaseEntry(entry);
     }
-    // Hand free models to planes that do not have one yet.
+    // Hand free models to aircraft that do not have one yet.
     for (const hex of want) {
-      if (state.pool.some((e) => e.hex === hex)) continue;
-      const entry = state.pool.find((e) => !e.hex);
+      if (pool.some((e) => e.hex === hex)) continue;
+      const entry = pool.find((e) => !e.hex);
       if (!entry) break;
       const rec = state.byHex.get(hex);
       entry.hex = hex;
@@ -871,6 +1268,11 @@
     }
   }
 
+  function assignModels(ranked) {
+    assignModelsToPool(state.pool, ranked, (rec) => !rec.heli, CFG.modelRangeM);
+    assignModelsToPool(state.heliPool, ranked, (rec) => !!rec.heli, CFG.heliModelRangeM);
+  }
+
   function releaseEntry(entry) {
     const rec = entry.hex ? state.byHex.get(entry.hex) : null;
     if (rec) rec.bb.show = true;
@@ -879,30 +1281,46 @@
   }
 
   function releaseModel(hex) {
-    for (const entry of state.pool) if (entry.hex === hex) releaseEntry(entry);
+    for (const pool of [state.pool, state.heliPool]) {
+      for (const entry of pool) if (entry.hex === hex) releaseEntry(entry);
+    }
   }
 
-  /** Every frame: the few model planes move smoothly, not in 200 ms hops. */
-  function updateModels(now) {
-    for (const entry of state.pool) {
-      if (!entry.hex) continue;
-      const rec = state.byHex.get(entry.hex);
-      if (!rec) {
-        releaseEntry(entry);
-        continue;
-      }
+  /** Every frame: smooth movement for all visible entities. */
+  function updateSmooth(now) {
+    const heading = state.viewer.camera.heading;
+    for (const rec of state.byHex.values()) {
       const trk = advance(rec, now);
-      hpr.heading = trk + CFG.modelHeadingOffset;
-      hpr.pitch = Math.max(-0.26, Math.min(0.26, Math.atan2(rec.climb, Math.max(rec.speedMs, 50))));
-      hpr.roll = 0;
-      Cesium.Transforms.headingPitchRollToFixedFrame(
-        rec.cart,
-        hpr,
-        Cesium.Ellipsoid.WGS84,
-        Cesium.Transforms.eastNorthUpToFixedFrame,
-        modelMatrix,
-      );
-      entry.model.modelMatrix = Cesium.Matrix4.clone(modelMatrix);
+      rec.bb.position = rec.cart;
+      rec.bb.rotation = heading - trk;
+
+      if (rec.chip) rec.chip.position = rec.cart;
+      if (rec.label) rec.label.position = rec.cart;
+    }
+    if (state.selectedHex) updateDropLine();
+
+    for (const pool of [state.pool, state.heliPool]) {
+      for (const entry of pool) {
+        if (!entry.hex) continue;
+        const rec = state.byHex.get(entry.hex);
+        if (!rec) {
+          releaseEntry(entry);
+          continue;
+        }
+        const trk = (rec.track * Math.PI) / 180;
+        hpr.heading = trk + CFG.modelHeadingOffset;
+        hpr.pitch = Math.max(-0.26, Math.min(0.26, Math.atan2(rec.climb, Math.max(rec.speedMs, 50))));
+        hpr.roll = 0;
+        if (!entry.matrix) entry.matrix = new Cesium.Matrix4();
+        Cesium.Transforms.headingPitchRollToFixedFrame(
+          rec.cart,
+          hpr,
+          Cesium.Ellipsoid.WGS84,
+          Cesium.Transforms.eastNorthUpToFixedFrame,
+          entry.matrix,
+        );
+        entry.model.modelMatrix = entry.matrix;
+      }
     }
   }
 
@@ -957,19 +1375,29 @@
     const chipOffset = new Cesium.Cartesian2(0, big ? -30 : -15);
     const labelOffset = new Cesium.Cartesian2(0, big ? 30 : 15);
     const fade = new Cesium.NearFarScalar(1.5e5, 1.0, 1.5e6, 0.7);
+    // Emergency wins over military, which wins over the normal airline chip.
+    const badge = rec.emergency
+      ? EMERGENCY_BADGE
+      : rec.military
+        ? MILITARY_BADGE
+        : rec.airline;
 
-    if (rec.airline) {
+    if (badge) {
       if (!rec.chip) {
         rec.chip = state.chips.add({
-          image: chipImage(rec.airline),
+          image: chipImage(badge),
           scale: 0.5,
           verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
           scaleByDistance: fade,
           id: 'flight:' + rec.hex,
         });
       }
+      rec.chip.image = chipImage(badge);
       rec.chip.position = rec.cart;
       rec.chip.pixelOffset = chipOffset;
+    } else if (rec.chip) {
+      state.chips.remove(rec.chip);
+      rec.chip = null;
     }
 
     const text = rec.callsign + '\n' + altText(rec.now.alt) + ' \u00b7 ' + Math.round(rec.speedMs / KT) + ' kt';
@@ -1007,7 +1435,7 @@
 
   function select(hex) {
     const rec = state.byHex.get(hex);
-    if (!rec) return;
+    if (!rec || !rec.visible) return;
     clearSelection();
     state.selectedHex = hex;
     rec.bb.scale = (CFG.iconPx * 1.45) / CFG.iconCanvasPx;
@@ -1154,10 +1582,26 @@
     const details = state.details.get(rec.hex) || {};
 
     set('fcCall', rec.callsign);
+    set('fcEmergency', rec.emergency ? 'EMERG' : '');
     set('fcMil', rec.military ? 'MIL' : '');
-    set('fcAirline', rec.airline ? rec.airline.n : '');
+    set(
+      'fcAirline',
+      rec.emergency
+        ? 'Emergency' + (rec.emergencyReason ? ' \u00b7 ' + rec.emergencyReason : '')
+        : rec.military
+          ? 'Military'
+          : rec.airline
+            ? rec.airline.n
+            : '',
+    );
     set('fcSub', [rec.reg, typeName(rec.type)].filter(Boolean).join(' \u00b7 ') || rec.hex.toUpperCase());
-    state.ui.card.style.borderLeftColor = rec.airline ? rec.airline.c : '#35404f';
+    state.ui.card.style.borderLeftColor = rec.emergency
+      ? '#d92b2b'
+      : rec.military
+        ? '#6e7b68'
+        : rec.airline
+          ? rec.airline.c
+          : '#35404f';
 
     set('fcAlt', altFeetText(rec.now.alt));
     set('fcSpd', Math.round(rec.speedMs / KT) + ' kts');
@@ -1209,9 +1653,11 @@
 
   function clearAll() {
     clearSelection();
-    for (const entry of state.pool) {
-      entry.hex = null;
-      entry.model.show = false;
+    for (const pool of [state.pool, state.heliPool]) {
+      for (const entry of pool) {
+        entry.hex = null;
+        entry.model.show = false;
+      }
     }
     if (state.billboards) state.billboards.removeAll();
     if (state.chips) state.chips.removeAll();
@@ -1252,12 +1698,12 @@
     viewer.scene.preRender.addEventListener(() => {
       if (!state.enabled || state.byHex.size === 0) return;
       const now = performance.now();
-      updateModels(now);
+      updateSmooth(now);
       // Ranking every aircraft, rewriting tags and refreshing the card is
       // expensive, and preRender fires at display rate. Doing all of it every
       // frame was what made the globe stutter; 5 Hz is invisible for a feed
-      // that only polls every 10 s. The 3D models above still get their
-      // matrices every frame, so they keep moving smoothly.
+      // that only polls every 10 s. The positions above still get their
+      // updates every frame, so everything keeps moving smoothly.
       if (now - state.lastStepMs < CFG.stepMs) return;
       state.lastStepMs = now;
       stepPositions(now);
@@ -1324,10 +1770,17 @@
   window.GEVLite.flightStats = () => ({
     enabled: state.enabled,
     drawn: state.byHex.size,
+    visible: [...state.byHex.values()].filter((rec) => rec.visible).length,
+    filter: state.filter,
+    search: state.search,
+    military: [...state.byHex.values()].filter((rec) => rec.military).length,
+    emergency: [...state.byHex.values()].filter((rec) => rec.emergency).length,
     selected: state.selectedHex,
     note: state.statusNote,
     models: state.pool.length,
     modelsInUse: state.pool.filter((e) => e.hex).length,
+    heliModels: state.heliPool.length,
+    heliModelsInUse: state.heliPool.filter((e) => e.hex).length,
     tagged: [...state.byHex.values()].filter((r) => r.label).length,
   });
 

@@ -58,6 +58,11 @@
               <span class="layer-note" id="flightsStatus"></span>
               <span class="layer-switch" aria-hidden="true"></span>
             </button>
+            <button class="layer-row" id="layerSatellites" aria-pressed="true">
+              <span class="layer-name">SATELLITES</span>
+              <span class="layer-note" id="satellitesStatus"></span>
+              <span class="layer-switch" aria-hidden="true"></span>
+            </button>
           </div>
           <div class="layers-group">
             <div class="layers-title">CAMERA TYPE</div>
@@ -65,6 +70,35 @@
               <button data-type="all" class="on">ALL</button>
               <button data-type="still">STILLS</button>
               <button data-type="live">LIVE</button>
+            </div>
+          </div>
+          <div class="layers-group">
+            <div class="layers-title">AIRCRAFT FILTER</div>
+            <div class="layer-seg" id="flightFilter" role="group" aria-label="Aircraft filter">
+              <button data-filter="all" class="on">ALL</button>
+              <button data-filter="watch">MIL/EMERG</button>
+              <button data-filter="heli">HELI</button>
+              <button data-filter="low">LOW</button>
+            </div>
+            <input
+              id="flightSearch"
+              class="layer-search"
+              type="search"
+              placeholder="CALLSIGN / REG / TYPE"
+              aria-label="Search aircraft"
+              autocomplete="off"
+              spellcheck="false"
+            />
+          </div>
+          <div class="layers-group">
+            <div class="layers-title">SATELLITE FILTER</div>
+            <div class="layer-seg" id="satelliteFilter" role="group" aria-label="Satellite filter">
+              <button data-sat="all" class="on">ALL</button>
+              <button data-sat="station">STN</button>
+              <button data-sat="nav">NAV</button>
+              <button data-sat="weather">WX</button>
+              <button data-sat="military">MIL</button>
+              <button data-sat="science">SCI</button>
             </div>
           </div>
         </div>
@@ -76,12 +110,15 @@
       <div id="credits">
         Camera data: Austin &middot; Calgary &middot; WSDOT &middot; TfL &middot; Fintraffic &middot;
         Statens vegvesen &middot; HK TD &middot; DriveBC &middot; NSW &middot; A22 &middot; DelDOT
+        &middot; Satellites: CelesTrak
       </div>
     </div>
 
     <div id="boot">Loading globe…</div>
 
+    <script src="https://cdn.jsdelivr.net/npm/satellite.js@5.0.0/dist/satellite.min.js"></script>
     <script src="app.js"></script>
     <script src="flights.js"></script>
+    <script src="satellites.js"></script>
   </body>
 </html>
