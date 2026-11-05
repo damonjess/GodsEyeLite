@@ -451,26 +451,16 @@ class CctvRepository(private val userAgent: String = "gods-eye-lite/0.1 (Android
                 val lon = location.optString("longitude").toDoubleOrNull() ?: continue
                 if (!lat.isFinite() || !lon.isFinite()) continue
                 val imageData = cctv.optJSONObject("imageData") ?: continue
-                val video = imageData.optString("streamingVideoURL").nonBlank()
-                    // Most rows use the bare host; a few spell the default
-                    // port or plain http. Normalize those to the working HTTPS
-                    // endpoint instead of dropping otherwise live cameras.
-                    ?.replace("https://wzmedia.dot.ca.gov:443/", "https://wzmedia.dot.ca.gov/")
-                    ?.replace("http://wzmedia.dot.ca.gov/", "https://wzmedia.dot.ca.gov/")
-                    ?.takeIf { it.startsWith("https://wzmedia.dot.ca.gov/") }
-                    ?: continue
                 val still = imageData.optJSONObject("static")
                     ?.optString("currentImageURL")
                     ?.takeIf { it.startsWith("https://cwwp2.dot.ca.gov/") }
-                    ?: ""
+                    ?: continue
                 val index = cctv.optString("index").ifBlank { "${i + 1}" }
-                // District-local indexes repeat, so include the stream's D-number.
-                val district = video.removePrefix("https://wzmedia.dot.ca.gov/")
-                    .substringBefore('/')
-                val id = if (district.isBlank()) "row-${i + 1}" else "$district:$index"
+                val district = location.optString("district").trim()
+                val id = if (district.isBlank()) "row-${i + 1}" else "D$district:$index"
                 val name = location.optString("locationName").trim()
                     .ifBlank { "Caltrans camera $id" }
-                out += RawCamera("california:$id", name, lat, lon, still, video)
+                out += RawCamera("california:$id", name, lat, lon, still, null)
             }
             return out
         }

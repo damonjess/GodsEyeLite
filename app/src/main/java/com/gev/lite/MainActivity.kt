@@ -430,6 +430,12 @@ class MainActivity : Activity() {
     private fun startClip(url: String, camera: CctvCamera) {
         val player = ExoPlayer.Builder(this).build()
         clipPlayer = player
+        val timeoutRunnable = Runnable {
+            if (clipPlayer == player && selected?.id == camera.id && !player.isPlaying && player.playbackState != Player.STATE_READY) {
+                Log.w(TAG, "clip playback timed out, falling back to still image")
+                showStill(camera)
+            }
+        }
         try {
             player.setVideoTextureView(frameVideo)
             player.volume = 0f
@@ -437,21 +443,28 @@ class MainActivity : Activity() {
             player.addListener(object : Player.Listener {
                 override fun onPlaybackStateChanged(playbackState: Int) {
                     if (playbackState == Player.STATE_READY && selected?.id == camera.id) {
+                        main.removeCallbacks(timeoutRunnable)
                         cameraCredit.text = camera.credit
                     }
                 }
 
                 override fun onIsPlayingChanged(isPlaying: Boolean) {
-                    if (isPlaying && selected?.id == camera.id) cameraCredit.text = camera.credit
+                    if (isPlaying && selected?.id == camera.id) {
+                        main.removeCallbacks(timeoutRunnable)
+                        cameraCredit.text = camera.credit
+                    }
                 }
 
                 override fun onPlayerError(error: PlaybackException) {
+                    main.removeCallbacks(timeoutRunnable)
                     Log.w(TAG, "clip failed: ${error.errorCodeName}")
                     if (selected?.id == camera.id) showStill(camera)
                 }
             })
             val http = DefaultHttpDataSource.Factory()
                 .setUserAgent(BROWSER_MEDIA_USER_AGENT)
+                .setConnectTimeoutMs(6_000)
+                .setReadTimeoutMs(6_000)
                 .setAllowCrossProtocolRedirects(true)
             if (url.startsWith("https://video.deldot.gov/")) {
                 // Its own map sends a browser identity and referer.
@@ -464,7 +477,9 @@ class MainActivity : Activity() {
             player.setMediaSource(source)
             player.prepare()
             player.playWhenReady = true
+            main.postDelayed(timeoutRunnable, 6_000)
         } catch (error: Exception) {
+            main.removeCallbacks(timeoutRunnable)
             Log.w(TAG, "clip failed: ${error.message}")
             showStill(camera)
         }

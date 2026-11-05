@@ -24,7 +24,7 @@ class CctvRepositoryTest {
         // One real still per new still pack, through the same native fetch the
         // camera panel uses. NSW is included on purpose: it only serves a JPEG
         // to a browser user-agent.
-        for (pack in listOf("finland", "norway", "hongkong", "drivebc", "nsw", "a22")) {
+        for (pack in listOf("finland", "norway", "hongkong", "drivebc", "nsw", "a22", "california")) {
             val camera = cameras.first { it.pack == pack }
             val frame = repository.fetchFrame(camera.imageUrl)
                 ?: error("frame for $pack was empty (${camera.imageUrl})")
@@ -49,14 +49,13 @@ class CctvRepositoryTest {
         val california = cameras.firstOrNull { it.pack == "california" }
         assertTrue("California has no cameras", california != null)
         assertTrue(
-            "California has no https HLS URL",
-            california?.videoUrl?.startsWith("https://wzmedia.dot.ca.gov/") == true,
+            "California has no image URL",
+            california?.imageUrl?.startsWith("https://cwwp2.dot.ca.gov/") == true,
         )
 
         for ((label, url) in listOf(
             "deldot" to deldot.videoUrl,
             "norway" to norwayVideo?.videoUrl,
-            "california" to california?.videoUrl,
         )) {
             val playlist = repository.fetchFrame(url!!)
             if (playlist != null) {
