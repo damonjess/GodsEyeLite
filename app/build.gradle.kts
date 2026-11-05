@@ -33,6 +33,12 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
+    // The camera test touches the live feeds; android.util.Log is a stub in a
+    // JVM unit test and must return instead of throwing when a pack fails.
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
+
     kotlinOptions {
         jvmTarget = "17"
     }
@@ -43,6 +49,9 @@ dependencies {
     // instead of file://, which is what lets Cesium's blob-backed web workers run
     // and gives the page a stable, secure origin.
     implementation("androidx.webkit:webkit:1.12.1")
+    // ExoPlayer's HLS support: MediaPlayer's NuPlayer rejects DelDOT's streams.
+    implementation("androidx.media3:media3-exoplayer:1.4.1")
+    implementation("androidx.media3:media3-exoplayer-hls:1.4.1")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
 }

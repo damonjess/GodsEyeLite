@@ -57,6 +57,14 @@
     calgary: '#ffc24b',
     wsdot: '#7ab8ff',
     tfl: '#ff7ab8',
+    finland: '#8be0ff',
+    norway: '#b8a6ff',
+    hongkong: '#ff9f6b',
+    drivebc: '#9ee37d',
+    nsw: '#ffe066',
+    a22: '#ff8f8f',
+    deldot: '#ff6b6b',
+    california: '#ffb84d',
   };
   const FALLBACK_COLOR = '#c8c8d8';
 
@@ -93,6 +101,9 @@
     cameras: [],
     packs: [],
     hidden: new Set(),
+    camerasOn: true,
+    cameraType: 'all', // 'all' | 'still' | 'live'
+    planesOn: true,
     ionToken: '',
     tokenApplied: false,
   };
@@ -115,6 +126,20 @@
 
   function colorFor(pack) {
     return PACK_COLORS[pack] || FALLBACK_COLOR;
+  }
+
+  /**
+   * Whether a camera belongs in the current layer/filter. Pack chips, the
+   * camera switch and the type buttons all reduce the same set, so the pins,
+   * thumbnails and count cannot disagree.
+   */
+  function cameraMatches(camera) {
+    if (!state.camerasOn) return false;
+    if (state.hidden.has(camera.pack)) return false;
+    if (!isFinite(camera.lat) || !isFinite(camera.lon)) return false;
+    if (state.cameraType === 'live' && !camera.videoUrl) return false;
+    if (state.cameraType === 'still' && camera.videoUrl) return false;
+    return true;
   }
 
   // ── Boot ───────────────────────────────────────────────────────────────────
@@ -171,9 +196,11 @@
     await addBaseImagery(viewer);
     wirePicking(viewer);
     wireThumbnails(viewer);
-    renderPackChips();
-    updateCountLabel();
     wireHudAutoHide();
+    renderPackChips();
+    renderLayers();
+    wireLayers();
+    updateCountLabel();
 
     const boot = document.getElementById('boot');
     if (boot) boot.remove();
@@ -246,6 +273,9 @@
         const resource = await Cesium.IonResource.fromAssetId(assetId);
         const tileset = await Cesium.Cesium3DTileset.fromUrl(resource, {
           maximumScreenSpaceError: 16,
+          // Photogrammetry is single-sided: entering a roof makes the walls
+          // vanish and the building look flat. Keep the camera on its surface.
+          enableCollision: true,
         });
         viewer.scene.primitives.add(tileset);
         log('3D buildings on (asset ' + assetId + ')');
@@ -272,8 +302,7 @@
     state.pointRecords = [];
     const collection = new Cesium.PointPrimitiveCollection();
     for (const camera of state.cameras) {
-      if (state.hidden.has(camera.pack)) continue;
-      if (!isFinite(camera.lat) || !isFinite(camera.lon)) continue;
+      if (!cameraMatches(camera)) continue;
       const position = Cesium.Cartesian3.fromDegrees(camera.lon, camera.lat);
       state.positions.set(camera.id, position);
       const primitive = collection.add({
@@ -323,11 +352,27 @@
   function updateCountLabel() {
     const hint = document.getElementById('hint');
     if (!hint) return;
+    const total = state.cameras.length;
     const shown = state.points ? state.points.length : 0;
-    hint.textContent =
-      state.cameras.length === 0
-        ? 'Loading cameras…'
-        : shown + ' of ' + state.cameras.length + ' cameras shown  ·  tap a dot or thumbnail';
+    if (total === 0) {
+      hint.textContent = 'Loading cameras…';
+      return;
+    }
+    if (!state.camerasOn) {
+      hint.textContent = 'Cameras hidden';
+      return;
+    }
+    if (shown === 0) {
+      hint.textContent = 'No cameras match this filter';
+      return;
+    }
+    const scope =
+      state.cameraType === 'live'
+        ? ' live cameras'
+        : state.cameraType === 'still'
+          ? ' still cameras'
+          : ' of ' + total + ' cameras';
+    hint.textContent = shown + scope + ' shown  ·  tap a dot or thumbnail';
   }
 
   function wirePicking(viewer) {
@@ -425,7 +470,7 @@
 
     const candidates = [];
     for (const camera of state.cameras) {
-      if (state.hidden.has(camera.pack)) continue;
+      if (!cameraMatches(camera)) continue;
       const position = state.positions.get(camera.id);
       if (!position) continue;
 
@@ -569,6 +614,16 @@
     card.appendChild(cornerLeft);
     card.appendChild(cornerRight);
 
+    // DelDOT publishes live video with no still frame, so its card is a name
+    // bar with a LIVE badge instead of an empty photo.
+    if (camera.videoUrl) {
+      card.dataset.live = '1';
+      const live = document.createElement('div');
+      live.className = 'thumb-live';
+      live.textContent = 'LIVE';
+      card.appendChild(live);
+    }
+
     const stem = document.createElement('div');
     stem.className = 'thumb-stem';
 
@@ -605,6 +660,9 @@
    * open-data licences require it to stay visible. Any touch, drag or wheel
    * brings the controls straight back.
    */
+  /** Set by wireHudAutoHide so the layers panel can keep the HUD awake. */
+  let wakeHud = () => {};
+
   function wireHudAutoHide() {
     const hud = document.getElementById('hud');
     if (!hud) return;
@@ -615,12 +673,17 @@
     const wake = () => {
       hud.classList.remove('idle');
       clearTimeout(timer);
-      timer = setTimeout(() => hud.classList.add('idle'), IDLE_MS);
+      timer = setTimeout(() => {
+        const panel = document.getElementById('layersPanel');
+        if (panel && !panel.hidden) return;
+        hud.classList.add('idle');
+      }, IDLE_MS);
     };
 
     for (const type of ['pointerdown', 'pointermove', 'wheel', 'touchstart', 'keydown']) {
       window.addEventListener(type, wake, { passive: true });
     }
+    wakeHud = wake;
     wake();
   }
 
@@ -646,6 +709,66 @@
     }
   }
 
+  function renderLayers() {
+    const cameras = document.getElementById('layerCameras');
+    const planes = document.getElementById('layerPlanes');
+    if (cameras) cameras.setAttribute('aria-pressed', String(state.camerasOn));
+    if (planes) planes.setAttribute('aria-pressed', String(state.planesOn));
+    for (const button of document.querySelectorAll('#layerType button')) {
+      button.classList.toggle('on', button.dataset.type === state.cameraType);
+    }
+  }
+
+  function setCamerasOn(on) {
+    state.camerasOn = !!on;
+    renderLayers();
+    clearThumbs();
+    rebuildPoints();
+  }
+
+  function setCameraType(type) {
+    if (type !== 'all' && type !== 'still' && type !== 'live') return;
+    state.cameraType = type;
+    renderLayers();
+    clearThumbs();
+    rebuildPoints();
+  }
+
+  function wireLayers() {
+    const panel = document.getElementById('layersPanel');
+    const button = document.getElementById('layersBtn');
+    if (!panel || !button) return;
+
+    const setOpen = (open) => {
+      panel.hidden = !open;
+      button.setAttribute('aria-expanded', String(open));
+      wakeHud();
+    };
+
+    button.addEventListener('click', () => setOpen(panel.hidden));
+    const close = document.getElementById('layersClose');
+    if (close) close.addEventListener('click', () => setOpen(false));
+
+    const cameras = document.getElementById('layerCameras');
+    if (cameras) cameras.addEventListener('click', () => setCamerasOn(!state.camerasOn));
+
+    const planes = document.getElementById('layerPlanes');
+    if (planes) {
+      planes.addEventListener('click', () => {
+        state.planesOn = !state.planesOn;
+        renderLayers();
+        const api = window.GEVLite;
+        if (api && typeof api.setFlightsEnabled === 'function') {
+          api.setFlightsEnabled(state.planesOn);
+        }
+      });
+    }
+
+    for (const typeButton of document.querySelectorAll('#layerType button')) {
+      typeButton.addEventListener('click', () => setCameraType(typeButton.dataset.type));
+    }
+  }
+
   function fail(message) {
     const boot = document.getElementById('boot');
     if (boot) boot.textContent = message;
@@ -666,6 +789,12 @@
       state.cameras = Array.isArray(cameras) ? cameras : [];
       rebuildPoints();
       log('cameras: ' + state.cameras.length);
+    },
+    setCameraLayer(on) {
+      setCamerasOn(!!on);
+    },
+    setCameraFilter(type) {
+      setCameraType(type);
     },
     resetView() {
       if (!state.viewer) return;
@@ -713,6 +842,10 @@
         drawn: state.points ? state.points.length : 0,
         packs: state.packs.length,
         hidden: Array.from(state.hidden),
+        camerasOn: state.camerasOn,
+        cameraType: state.cameraType,
+        liveCameras: state.cameras.filter((camera) => !!camera.videoUrl).length,
+        stillCameras: state.cameras.filter((camera) => !camera.videoUrl).length,
         tokenApplied: state.tokenApplied,
         // Imagery diagnostics: a layer that exists but is not attached to the
         // globe is the difference between "tiles load" and "the globe shows them".

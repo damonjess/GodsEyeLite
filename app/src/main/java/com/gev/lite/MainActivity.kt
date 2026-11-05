@@ -4,13 +4,10 @@ import android.annotation.SuppressLint
 import android.content.pm.ApplicationInfo
 import android.app.Activity
 import android.graphics.BitmapFactory
-import android.graphics.SurfaceTexture
-import android.media.MediaPlayer
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
-import android.view.Surface
 import android.view.TextureView
 import android.view.View
 import android.webkit.JavascriptInterface
@@ -23,6 +20,12 @@ import android.widget.EditText
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
+import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
+import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.webkit.WebViewAssetLoader
 import androidx.webkit.WebViewClientCompat
 import org.json.JSONArray
@@ -48,6 +51,11 @@ class MainActivity : Activity() {
         const val TAG = "GodsEyeLite"
         const val PREFS = "gev-lite"
         const val PREF_ION_TOKEN = "ion_token"
+
+        /** DelDOT's stream host is friendlier to a browser identity than the media stack's default UA. */
+        const val BROWSER_MEDIA_USER_AGENT =
+            "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) " +
+                "Chrome/126 Mobile Safari/537.36"
 
         /**
          * Served by WebViewAssetLoader. A real https origin (rather than
@@ -84,9 +92,7 @@ class MainActivity : Activity() {
     private val cameras = LinkedHashMap<String, CctvCamera>()
     private var selected: CctvCamera? = null
     private var globeReady = false
-    private var clipPlayer: MediaPlayer? = null
-    private var pendingClipUrl: String? = null
-    private var pendingCamera: CctvCamera? = null
+    private var clipPlayer: ExoPlayer? = null
 
     private val prefs by lazy { getSharedPreferences(PREFS, MODE_PRIVATE) }
 
@@ -113,23 +119,6 @@ class MainActivity : Activity() {
         cameraPanel = findViewById(R.id.cameraPanel)
         frameImage = findViewById(R.id.frameImage)
         frameVideo = findViewById(R.id.frameVideo)
-        frameVideo.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
-            override fun onSurfaceTextureAvailable(texture: SurfaceTexture, width: Int, height: Int) {
-                // A clip requested before the texture existed starts now.
-                val url = pendingClipUrl ?: return
-                val camera = pendingCamera ?: return
-                startClip(url, camera, texture)
-            }
-
-            override fun onSurfaceTextureSizeChanged(texture: SurfaceTexture, width: Int, height: Int) = Unit
-
-            override fun onSurfaceTextureDestroyed(texture: SurfaceTexture): Boolean {
-                releasePlayer()
-                return true
-            }
-
-            override fun onSurfaceTextureUpdated(texture: SurfaceTexture) = Unit
-        }
         cameraTitle = findViewById(R.id.cameraTitle)
         cameraCredit = findViewById(R.id.cameraCredit)
 
@@ -281,7 +270,10 @@ class MainActivity : Activity() {
                     // a plain <img> needs no CORS, and every pack serves https.
                     // Sending the URL here is what lets a card render without a
                     // round trip through the native frame fetcher.
-                    .put("imageUrl", camera.imageUrl),
+                    .put("imageUrl", camera.imageUrl)
+                    // Lets the globe mark a camera card as live video; the
+                    // native panel itself already has the full camera record.
+                    .put("videoUrl", camera.videoUrl ?: ""),
             )
         }
         evaluate("window.GEVLite && GEVLite.setCameras($array)")
@@ -389,9 +381,9 @@ class MainActivity : Activity() {
     }
 
     /**
-     * Plays a TfL jamcam clip, looping and muted.
+     * Plays a live HLS clip, muted.
      *
-     * MediaPlayer + TextureView rather than VideoView: VideoView renders into a
+     * ExoPlayer + TextureView rather than VideoView: VideoView renders into a
      * SurfaceView, which does not composite correctly in the same window as a
      * hardware-accelerated WebView — the clip decoded (the codec logged frames)
      * but the panel showed nothing but its background colour. A TextureView is
@@ -402,32 +394,49 @@ class MainActivity : Activity() {
      */
     private fun playClip(url: String, camera: CctvCamera) {
         releasePlayer()
-        pendingClipUrl = url
-        pendingCamera = camera
         cameraCredit.text = "${camera.credit}  \u00b7  ${getString(R.string.frame_loading)}"
-
-        val texture = frameVideo.surfaceTexture
-        if (texture != null) startClip(url, camera, texture)
-        // Otherwise onSurfaceTextureAvailable starts it.
+        // ExoPlayer attaches its own TextureView listener and waits for the
+        // surface, so this is safe even while the panel is still being laid out.
+        startClip(url, camera)
     }
 
-    private fun startClip(url: String, camera: CctvCamera, texture: SurfaceTexture) {
-        val player = MediaPlayer()
+    private fun startClip(url: String, camera: CctvCamera) {
+        val player = ExoPlayer.Builder(this).build()
         clipPlayer = player
         try {
-            player.setSurface(Surface(texture))
-            player.isLooping = true
-            player.setVolume(0f, 0f)
-            player.setOnPreparedListener {
-                cameraCredit.text = camera.credit
-                if (selected?.id == camera.id) it.start()
+            player.setVideoTextureView(frameVideo)
+            player.volume = 0f
+            player.repeatMode = Player.REPEAT_MODE_ONE
+            player.addListener(object : Player.Listener {
+                override fun onPlaybackStateChanged(playbackState: Int) {
+                    if (playbackState == Player.STATE_READY && selected?.id == camera.id) {
+                        cameraCredit.text = camera.credit
+                    }
+                }
+
+                override fun onIsPlayingChanged(isPlaying: Boolean) {
+                    if (isPlaying && selected?.id == camera.id) cameraCredit.text = camera.credit
+                }
+
+                override fun onPlayerError(error: PlaybackException) {
+                    Log.w(TAG, "clip failed: ${error.errorCodeName}")
+                    if (selected?.id == camera.id) showStill(camera)
+                }
+            })
+            val http = DefaultHttpDataSource.Factory()
+                .setUserAgent(BROWSER_MEDIA_USER_AGENT)
+                .setAllowCrossProtocolRedirects(true)
+            if (url.startsWith("https://video.deldot.gov/")) {
+                // Its own map sends a browser identity and referer.
+                http.setDefaultRequestProperties(mapOf("Referer" to "https://deldot.gov/map/"))
             }
-            player.setOnErrorListener { _, _, _ ->
-                showStill(camera)
-                true
-            }
-            player.setDataSource(url)
-            player.prepareAsync()
+            // Infers HLS for .m3u8 (DelDOT/Norway) and progressive MP4 for
+            // TfL's short clips; forcing HlsMediaSource would break the clips.
+            val source = DefaultMediaSourceFactory(http)
+                .createMediaSource(MediaItem.fromUri(url))
+            player.setMediaSource(source)
+            player.prepare()
+            player.playWhenReady = true
         } catch (error: Exception) {
             Log.w(TAG, "clip failed: ${error.message}")
             showStill(camera)
@@ -439,21 +448,24 @@ class MainActivity : Activity() {
         releasePlayer()
         frameVideo.visibility = View.GONE
         frameImage.visibility = View.VISIBLE
+        // DelDOT publishes no still. Without this guard the fallback tried to
+        // fetch "", which threw on a worker thread and took the app down.
+        if (camera.imageUrl.isBlank()) {
+            frameImage.setImageDrawable(null)
+            cameraCredit.text = "${camera.credit}  \u00b7  ${getString(R.string.frame_failed)}"
+            return
+        }
         loadFrame(camera)
     }
 
     private fun stopClip() {
-        pendingClipUrl = null
-        pendingCamera = null
         releasePlayer()
     }
 
     private fun releasePlayer() {
         clipPlayer?.let { player ->
-            runCatching { player.setOnPreparedListener(null) }
-            runCatching { player.setOnErrorListener(null) }
+            runCatching { player.clearVideoTextureView(frameVideo) }
             runCatching { player.stop() }
-            runCatching { player.reset() }
             runCatching { player.release() }
         }
         clipPlayer = null
@@ -561,11 +573,7 @@ class MainActivity : Activity() {
         super.onPause()
         webView.onPause()
         // Do not keep streaming a clip (or holding the decoder) in the background.
-        clipPlayer?.let { player ->
-            if (runCatching { player.isPlaying }.getOrDefault(false)) {
-                runCatching { player.pause() }
-            }
-        }
+        clipPlayer?.let { player -> runCatching { if (player.isPlaying) player.pause() } }
     }
 
     override fun onResume() {

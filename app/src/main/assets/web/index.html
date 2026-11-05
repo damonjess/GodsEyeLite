@@ -36,16 +36,46 @@
       <div id="hud">
         <div id="title">GOD'S EYE LITE</div>
         <div id="packs"></div>
-        <div style="display: flex; gap: 8px;">
+        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
           <button id="reset">RESET VIEW</button>
           <button id="locate">LOCATE ME</button>
+          <button id="layersBtn" aria-expanded="false" aria-controls="layersPanel">LAYERS</button>
         </div>
+
+        <div id="layersPanel" hidden>
+          <div class="layers-head">
+            <span>LAYERS</span>
+            <button id="layersClose" aria-label="Close layers">&times;</button>
+          </div>
+          <div class="layers-group">
+            <div class="layers-title">SHOW</div>
+            <button class="layer-row" id="layerCameras" aria-pressed="true">
+              <span class="layer-name">CAMERAS</span>
+              <span class="layer-switch" aria-hidden="true"></span>
+            </button>
+            <button class="layer-row" id="layerPlanes" aria-pressed="true">
+              <span class="layer-name">PLANES</span>
+              <span class="layer-note" id="flightsStatus"></span>
+              <span class="layer-switch" aria-hidden="true"></span>
+            </button>
+          </div>
+          <div class="layers-group">
+            <div class="layers-title">CAMERA TYPE</div>
+            <div class="layer-seg" id="layerType" role="group" aria-label="Camera type">
+              <button data-type="all" class="on">ALL</button>
+              <button data-type="still">STILLS</button>
+              <button data-type="live">LIVE</button>
+            </div>
+          </div>
+        </div>
+
         <div id="hint">Tap a dot to open that camera</div>
       </div>
       <!-- Imagery attribution comes from Cesium's own credit line; this names
            the camera-data providers, whose licences require attribution. -->
       <div id="credits">
-        Camera data: City of Austin &middot; City of Calgary &middot; WSDOT &middot; TfL
+        Camera data: Austin &middot; Calgary &middot; WSDOT &middot; TfL &middot; Fintraffic &middot;
+        Statens vegvesen &middot; HK TD &middot; DriveBC &middot; NSW &middot; A22 &middot; DelDOT
       </div>
     </div>
 

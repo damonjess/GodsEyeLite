@@ -42,7 +42,8 @@ body {
 #hud.idle,
 #hud.idle #packs,
 #hud.idle #reset,
-#hud.idle #locate {
+#hud.idle #locate,
+#hud.idle #layersBtn {
   opacity: 0;
   pointer-events: none;
 }
@@ -89,7 +90,8 @@ body {
 }
 
 #reset,
-#locate {
+#locate,
+#layersBtn {
   pointer-events: auto;
   margin-top: 8px;
   background: rgba(10, 10, 15, 0.8);
@@ -99,6 +101,147 @@ body {
   padding: 6px 10px;
   font-family: monospace;
   font-size: 10px;
+}
+
+#layersBtn[aria-expanded="true"] {
+  border-color: #35e0c8;
+  color: #e8e8f0;
+}
+
+/* Compact layer/filter panel. It stays inside #hud so it shares the same
+   fade-on-idle behaviour; the layer panel keeps the HUD awake while open. */
+#layersPanel {
+  box-sizing: border-box;
+  width: min(260px, calc(100vw - 24px));
+  margin-top: 8px;
+  padding: 9px 10px 10px;
+  background: rgba(8, 10, 15, 0.94);
+  border: 1px solid #35404f;
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+  pointer-events: auto;
+}
+
+#layersPanel[hidden] {
+  display: none;
+}
+
+.layers-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #35e0c8;
+  font-family: monospace;
+  font-size: 10px;
+  letter-spacing: 1.5px;
+}
+
+#layersClose {
+  pointer-events: auto;
+  background: none;
+  border: 0;
+  color: #9a9ab0;
+  font-size: 20px;
+  line-height: 1;
+  padding: 0 2px;
+}
+
+.layers-group {
+  margin-top: 8px;
+  padding-top: 7px;
+  border-top: 1px solid rgba(53, 64, 79, 0.65);
+}
+
+.layers-title {
+  margin-bottom: 4px;
+  color: #7a7a92;
+  font-family: monospace;
+  font-size: 8px;
+  letter-spacing: 1.2px;
+}
+
+.layer-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 5px 0;
+  background: none;
+  border: 0;
+  color: #e8e8f0;
+  font-family: monospace;
+  font-size: 10px;
+  text-align: left;
+  pointer-events: auto;
+}
+
+.layer-name {
+  flex: 1;
+}
+
+.layer-note {
+  max-width: 70px;
+  overflow: hidden;
+  color: #7a7a92;
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.layer-switch {
+  position: relative;
+  flex: none;
+  width: 29px;
+  height: 15px;
+  border: 1px solid #35404f;
+  border-radius: 999px;
+  background: #12151d;
+}
+
+.layer-switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #6a6a80;
+  transition: left 140ms ease, background 140ms ease;
+}
+
+.layer-row[aria-pressed="true"] .layer-switch {
+  border-color: #35e0c8;
+  background: rgba(53, 224, 200, 0.16);
+}
+
+.layer-row[aria-pressed="true"] .layer-switch::after {
+  left: 16px;
+  background: #35e0c8;
+}
+
+.layer-seg {
+  display: flex;
+  gap: 4px;
+}
+
+.layer-seg button {
+  flex: 1;
+  pointer-events: auto;
+  background: rgba(10, 10, 15, 0.8);
+  border: 1px solid #35404f;
+  border-radius: 4px;
+  color: #9a9ab0;
+  font-family: monospace;
+  font-size: 8.5px;
+  letter-spacing: 0.6px;
+  padding: 5px 2px;
+}
+
+.layer-seg button.on {
+  border-color: #35e0c8;
+  background: rgba(53, 224, 200, 0.12);
+  color: #e8e8f0;
 }
 
 /* These two lines used to be #6a6a80 straight onto the globe. Measured against
@@ -195,6 +338,22 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Live HLS cameras can have no publisher still (DelDOT has none), so the card
+   is a labelled LIVE card rather than an empty picture. */
+.thumb-live {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  z-index: 1;
+  padding: 1px 4px;
+  background: #d92b2b;
+  color: #ffffff;
+  font-family: monospace;
+  font-size: 8px;
+  letter-spacing: 1px;
+  line-height: 1.4;
 }
 
 /* Corner brackets, as on the parent app's cards. */

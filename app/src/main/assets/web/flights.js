@@ -548,8 +548,6 @@
   function injectUi() {
     const style = document.createElement('style');
     style.textContent = `
-      #hud.idle #flightsToggle { opacity: 0; pointer-events: none; }
-      #flightsToggle { pointer-events: auto; margin-top: 8px; margin-right: 6px; }
       #flightCard {
         position: absolute; left: 12px; right: 12px; bottom: 34px; max-width: 440px;
         display: none; z-index: 5; pointer-events: none;
@@ -587,30 +585,8 @@
     `;
     document.head.appendChild(style);
 
-    const hud = document.getElementById('hud');
-    const toggle = document.createElement('button');
-    toggle.id = 'flightsToggle';
-    toggle.className = 'chip on';
-    toggle.addEventListener('click', () => setEnabled(!state.enabled));
-    if (hud) {
-      // #reset lives inside its own flex row in index.html, not directly under
-      // #hud. Passing it straight to insertBefore() throws NotFoundError (the
-      // node is not a child of #hud), which aborted start() before the poll
-      // timer, the camera listener and the first fetch were wired — so the
-      // layer never requested or drew a single aircraft. Anchor on the row that
-      // actually contains #reset instead.
-      const reset = document.getElementById('reset');
-      let anchor = null;
-      if (reset) {
-        let node = reset;
-        while (node.parentElement && node.parentElement !== hud) node = node.parentElement;
-        if (node.parentElement === hud) anchor = node;
-      }
-      hud.insertBefore(toggle, anchor);
-    } else {
-      document.body.appendChild(toggle);
-    }
-    state.ui.toggle = toggle;
+    // The Layers panel owns the planes switch; this layer only reports its
+    // status into that row.
 
     const card = document.createElement('div');
     card.id = 'flightCard';
@@ -659,12 +635,16 @@
   }
 
   function renderToggle() {
-    const t = state.ui.toggle;
-    if (!t) return;
-    t.classList.toggle('on', state.enabled);
+    const note = document.getElementById('flightsStatus');
+    if (!note) return;
     const count = state.byHex.size;
-    const suffix = !state.enabled ? '' : state.statusNote ? ' \u00b7 ' + state.statusNote : count ? ' ' + count : '';
-    t.textContent = '\u2708 FLIGHTS' + suffix;
+    note.textContent = !state.enabled
+      ? 'OFF'
+      : state.statusNote
+        ? state.statusNote
+        : count
+          ? String(count)
+          : '';
   }
 
   function setNote(note) {
@@ -1259,6 +1239,9 @@
 
   function start(viewer) {
     state.viewer = viewer;
+    // A toggle before this script finished loading is reflected on the row.
+    const planesRow = document.getElementById('layerPlanes');
+    if (planesRow && planesRow.getAttribute('aria-pressed') === 'false') state.enabled = false;
     state.billboards = viewer.scene.primitives.add(new Cesium.BillboardCollection());
     state.chips = viewer.scene.primitives.add(new Cesium.BillboardCollection());
     state.labels = viewer.scene.primitives.add(new Cesium.LabelCollection());
@@ -1336,6 +1319,8 @@
   window.GEVLite.setFlights = setFlights;
   window.GEVLite.flightsFailed = flightsFailed;
   window.GEVLite.setFlightDetails = setFlightDetails;
+  window.GEVLite.setFlightsEnabled = setEnabled;
+  window.GEVLite.flightsEnabled = () => state.enabled;
   window.GEVLite.flightStats = () => ({
     enabled: state.enabled,
     drawn: state.byHex.size,
