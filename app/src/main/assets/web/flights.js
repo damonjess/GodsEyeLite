@@ -9,8 +9,10 @@
  *  - Aircraft are drawn at their real altitude (Cesium positions take metres).
  *    Far away they are shape-specific icons (a BillboardCollection) tinted by
  *    height: green low -> blue -> violet high. Near the camera, fixed-wing
- *    aircraft swap to a 3D airliner model (plane.glb) and helicopters swap to a
- *    low-poly rotorcraft model (helicopter.glb).
+ *    aircraft swap to a detailed 3D airliner model (plane.glb) and helicopters
+ *    swap to a rotorcraft model (helicopter.glb) whose blades are animated.
+ *  - High jets leave a thin contrail behind them, so the air layer reads as
+ *    traffic rather than a field of dots.
  *  - Between polls each plane is dead-reckoned along its heading, so it glides
  *    instead of jumping every ten seconds.
  *  - The nearest planes get tags: an airline chip plus callsign and altitude.
@@ -47,15 +49,26 @@
     lowAltitudeM: 1524,
     // 3D model level of detail. Separate small pools are re-assigned to the
     // nearest fixed-wing aircraft and helicopters, so cost stays flat however
-    // many aircraft are in range.
+    // many aircraft are in range. Models are authored at real-world metres;
+    // the scale here gives them a little extra presence on a phone screen.
     modelUrl: 'plane.glb',
+    modelScale: 2.4,
     modelMax: 50,
     modelRangeM: 100_000,
     modelMinPixels: 64,
     heliModelUrl: 'helicopter.glb',
+    heliModelScale: 2.2,
     heliModelMax: 20,
     heliModelRangeM: 100_000,
     heliModelMinPixels: 80,
+    // Contrail: only high, fast jets. The line is dead-reckoned backwards from
+    // the current position, so it follows the plane between polls.
+    contrailMinAltM: 7600,
+    contrailMinSpeedMs: 60,
+    contrailMax: 70,
+    contrailPoints: 9,
+    contrailSeconds: 110,
+    contrailCoreSeconds: 38,
     // Both models face +Z (glTF's front). Cesium renders that along the local
     // east axis at heading 0, hence -90 degrees. If aircraft fly sideways or
     // backwards on a device, this is the one number to change (try 0, PI/2, PI).
@@ -72,6 +85,9 @@
     filter: 'all', // 'all' | 'watch' | 'heli' | 'low'
     search: '',
     billboards: null,
+    contrails: null,
+    contrailEntries: new Map(),
+    contrailMaterials: null,
     byHex: new Map(),
     selectedHex: null,
     trailPrimitive: null,
@@ -998,7 +1014,10 @@
         rec.bb.show = false;
         if (state.selectedHex === rec.hex) clearSelection();
       } else {
-        rec.bb.show = true;
+        // Do not resurrect the 2D icon over an aircraft that is currently
+        // represented by a 3D model. applyVisibility() runs on every poll, and
+        // without this guard the icon reappeared over the model every 10 s.
+        rec.bb.show = !rec.hasModel;
       }
     }
     renderFilterUi();
@@ -1110,6 +1129,7 @@
         rec = {
           hex: f.h,
           visible: true,
+          hasModel: false,
           emergency: false,
           emergencyReason: '',
           trail: [],
@@ -1190,7 +1210,81 @@
     const ranked = rankByDistance();
     assignModels(ranked);
     assignTags(ranked);
+    updateContrails(ranked);
     updateCard();
+  }
+
+  // ── Contrails ──────────────────────────────────────────────────────────────
+
+  /**
+   * A short line of dead-reckoned positions behind a high jet. One line per
+   * aircraft would be a draw call each; a PolylineCollection batches them all
+   * into one, so the whole layer stays cheap.
+   */
+  function contrailPositions(rec, count, seconds) {
+    if (!rec.now || !(rec.speedMs > 0)) return [];
+    const track = (rec.track * Math.PI) / 180;
+    const cosLat = Math.max(Math.cos((rec.now.lat * Math.PI) / 180), 0.01);
+    const positions = [];
+    for (let i = 0; i < count; i++) {
+      const age = (seconds * i) / Math.max(count - 1, 1);
+      const dist = rec.speedMs * age;
+      const lat = rec.now.lat - (dist * Math.cos(track)) / EARTH_R * (180 / Math.PI);
+      const lon = rec.now.lon - (dist * Math.sin(track)) / (EARTH_R * cosLat) * (180 / Math.PI);
+      positions.push(Cesium.Cartesian3.fromDegrees(lon, lat, rec.now.alt));
+    }
+    return positions;
+  }
+
+  function updateContrails(ranked) {
+    const collection = state.contrails;
+    const materials = state.contrailMaterials;
+    if (!collection || !materials) return;
+
+    const keep = new Set();
+    let count = 0;
+    for (const item of ranked) {
+      if (count >= CFG.contrailMax) break;
+      const rec = item.rec;
+      if (rec.heli || rec.hex === state.selectedHex) continue;
+      if ((rec.altM || 0) < CFG.contrailMinAltM) continue;
+      if ((rec.speedMs || 0) < CFG.contrailMinSpeedMs) continue;
+
+      const all = contrailPositions(rec, CFG.contrailPoints, CFG.contrailSeconds);
+      if (all.length < 2) continue;
+      keep.add(rec.hex);
+      count++;
+
+      let trail = state.contrailEntries.get(rec.hex);
+      if (!trail) {
+        trail = {
+          core: collection.add({
+            positions: [],
+            width: 2.2,
+            material: Cesium.Material.fromType('Color', { color: materials.core }),
+          }),
+          haze: collection.add({
+            positions: [],
+            width: 5.5,
+            material: Cesium.Material.fromType('Color', { color: materials.haze }),
+          }),
+        };
+        state.contrailEntries.set(rec.hex, trail);
+      }
+      const corePoints = Math.max(
+        2,
+        Math.round((CFG.contrailPoints * CFG.contrailCoreSeconds) / CFG.contrailSeconds),
+      );
+      trail.core.positions = all.slice(0, corePoints);
+      trail.haze.positions = all;
+    }
+
+    for (const [hex, trail] of state.contrailEntries) {
+      if (keep.has(hex)) continue;
+      collection.remove(trail.core);
+      collection.remove(trail.haze);
+      state.contrailEntries.delete(hex);
+    }
   }
 
   // ── 3D model level of detail ───────────────────────────────────────────────
@@ -1198,7 +1292,7 @@
   const hpr = new Cesium.HeadingPitchRoll();
   const modelMatrix = new Cesium.Matrix4();
 
-  function loadModelPool(pool, url, count, scale, minimumPixelSize, label) {
+  function loadModelPool(pool, url, count, scale, minimumPixelSize, label, animate) {
     for (let i = 0; i < count; i++) {
       Cesium.Model.fromGltfAsync({
         url,
@@ -1209,13 +1303,27 @@
         // without tinting it by altitude colour.
         colorBlendMode: Cesium.ColorBlendMode.MIX,
         colorBlendAmount: 0.0,
-        // Lit like a daytime photo rather than by the globe's sun position.
-        // Increased from 2.2 to 7.0 so the model is not underexposed/black.
+        // The camera-following light is a headlight; 7x keeps the white
+        // livery readable against the imagery. 1x was tested on-device and
+        // reads gray, so this is a calibrated exposure, not a sun substitute.
         lightColor: new Cesium.Cartesian3(7.0, 7.0, 7.0),
       })
         .then((model) => {
           if (!state.viewer) return;
           state.viewer.scene.primitives.add(model);
+          if (animate && model.activeAnimations) {
+            // fromGltfAsync resolves before ready when animations still have to
+            // be parsed; addAll throws until Model.ready is true, so wait for it.
+            const play = () => {
+              try {
+                model.activeAnimations.addAll({ loop: Cesium.ModelAnimationLoop.REPEAT });
+              } catch (error) {
+                log(`${label} animation unavailable: ` + (error && error.message));
+              }
+            };
+            if (model.ready) play();
+            else model.readyEvent.addEventListener(play);
+          }
           pool.push({ model, hex: null });
         })
         .catch((error) => {
@@ -1225,8 +1333,13 @@
   }
 
   function initModelPool() {
-    loadModelPool(state.pool, CFG.modelUrl, CFG.modelMax, 3, CFG.modelMinPixels, 'plane');
-    loadModelPool(state.heliPool, CFG.heliModelUrl, CFG.heliModelMax, 3, CFG.heliModelMinPixels, 'helicopter');
+    loadModelPool(
+      state.pool, CFG.modelUrl, CFG.modelMax, CFG.modelScale, CFG.modelMinPixels, 'plane', false,
+    );
+    loadModelPool(
+      state.heliPool, CFG.heliModelUrl, CFG.heliModelMax, CFG.heliModelScale, CFG.heliModelMinPixels,
+      'helicopter', true,
+    );
   }
 
   function rankByDistance() {
@@ -1259,6 +1372,7 @@
       entry.hex = hex;
       entry.model.show = true;
       entry.model.color = Cesium.Color.WHITE;
+      rec.hasModel = true;
       try {
         entry.model.id = 'flight:' + hex; // so a tap on the model selects it
       } catch (error) {
@@ -1275,7 +1389,10 @@
 
   function releaseEntry(entry) {
     const rec = entry.hex ? state.byHex.get(entry.hex) : null;
-    if (rec) rec.bb.show = true;
+    if (rec) {
+      rec.hasModel = false;
+      rec.bb.show = rec.visible;
+    }
     entry.hex = null;
     entry.model.show = false;
   }
@@ -1651,8 +1768,14 @@
 
   // ── Clearing / toggling ────────────────────────────────────────────────────
 
+  function clearContrails() {
+    if (state.contrails) state.contrails.removeAll();
+    state.contrailEntries.clear();
+  }
+
   function clearAll() {
     clearSelection();
+    clearContrails();
     for (const pool of [state.pool, state.heliPool]) {
       for (const entry of pool) {
         entry.hex = null;
@@ -1691,6 +1814,14 @@
     state.billboards = viewer.scene.primitives.add(new Cesium.BillboardCollection());
     state.chips = viewer.scene.primitives.add(new Cesium.BillboardCollection());
     state.labels = viewer.scene.primitives.add(new Cesium.LabelCollection());
+    state.contrails = viewer.scene.primitives.add(new Cesium.PolylineCollection());
+    // Colours are shared, materials are not: Polyline#_destroy() destroys its
+    // material, so a shared instance would break every other contrail as soon
+    // as one aircraft left the view.
+    state.contrailMaterials = {
+      core: Cesium.Color.fromCssColorString('#e9f2fc').withAlpha(0.34),
+      haze: Cesium.Color.fromCssColorString('#cfe0f2').withAlpha(0.09),
+    };
     injectUi();
 
     initModelPool();
@@ -1782,6 +1913,7 @@
     heliModels: state.heliPool.length,
     heliModelsInUse: state.heliPool.filter((e) => e.hex).length,
     tagged: [...state.byHex.values()].filter((r) => r.label).length,
+    contrails: state.contrailEntries.size,
   });
 
   whenViewerReady(start);

@@ -99,6 +99,17 @@
     g.lineJoin = 'round';
     g.lineCap = 'round';
 
+    // Soft halo: the billboard's color tints the whole image, so each category
+    // gets a faint glow in its own colour against the dark ground.
+    const halo = g.createRadialGradient(0, 0, 6, 0, 0, 30);
+    halo.addColorStop(0, 'rgba(255, 255, 255, 0.30)');
+    halo.addColorStop(0.55, 'rgba(255, 255, 255, 0.10)');
+    halo.addColorStop(1, 'rgba(255, 255, 255, 0)');
+    g.fillStyle = halo;
+    g.beginPath();
+    g.arc(0, 0, 30, 0, Math.PI * 2);
+    g.fill();
+
     // A tiny white/cream spacecraft glyph. The billboard's color tints it by
     // category, so one image serves every filter.
     g.fillStyle = '#ffffff';

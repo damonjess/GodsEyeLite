@@ -184,6 +184,23 @@
     viewer.scene.globe.showGroundAtmosphere = false;
     // Keep the default imagery resolution reasonable on a phone GPU.
     viewer.scene.globe.maximumScreenSpaceError = 3;
+    // The deep space tone shows while tiles are still streaming and through
+    // any imagery gaps; the stock mid-blue reads as a loading artifact.
+    viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString('#08101c');
+    // Smooths the hard pixel edges on aircraft and pins without the cost of
+    // MSAA on a phone GPU.
+    viewer.scene.postProcessStages.fxaa.enabled = true;
+    // Cesium's default sun light turns the 3D aircraft into black silhouettes
+    // whenever the view is on the night side of the planet. A directional
+    // light that follows the camera keeps the models readable at any hour.
+    const modelLight = new Cesium.DirectionalLight({
+      direction: new Cesium.Cartesian3(0, 0, -1),
+    });
+    // Replacing scene.light is global. The globe is unlit above, and pinning
+    // the atmosphere to its fixed overhead light keeps both independent of the
+    // camera light; only the 3D aircraft should use it.
+    viewer.scene.globe.dynamicAtmosphereLighting = false;
+    viewer.scene.light = modelLight;
     // Cesium's stock zoom is slow at planetary scale: measured on a phone, one
     // pinch from 12,000 km only reached ~3,900 km, so a city took a dozen
     // pinches. At 10 the same pinch reaches ~1,100 km, i.e. about three to a
@@ -202,6 +219,20 @@
     renderLayers();
     wireLayers();
     updateCountLabel();
+
+    // Let the atmosphere glow a little warmer against the dark ocean while
+    // keeping the default physical scattering.
+    viewer.scene.skyAtmosphere.brightnessShift = 0.05;
+    viewer.scene.skyAtmosphere.saturationShift = 0.08;
+
+    const lightDirection = new Cesium.Cartesian3();
+    viewer.scene.preRender.addEventListener(() => {
+      // Negating the camera position aims the light from the viewer's side of
+      // the globe, so the tops of the aircraft are lit from above.
+      Cesium.Cartesian3.negate(viewer.camera.positionWC, lightDirection);
+      Cesium.Cartesian3.normalize(lightDirection, lightDirection);
+      modelLight.direction = lightDirection;
+    });
 
     const boot = document.getElementById('boot');
     if (boot) boot.remove();
@@ -306,11 +337,22 @@
       if (!cameraMatches(camera)) continue;
       const position = Cesium.Cartesian3.fromDegrees(camera.lon, camera.lat);
       state.positions.set(camera.id, position);
+      const pointColor = Cesium.Color.fromCssColorString(colorFor(camera.pack));
       const primitive = collection.add({
         position,
         pixelSize: 7,
-        color: Cesium.Color.fromCssColorString(colorFor(camera.pack)),
-        outlineColor: Cesium.Color.fromCssColorString('#07070b'),
+        // At world view thousands of pins merge into dense clusters. Shrinking
+        // them with distance keeps the city-scale view crisp, and a dark shade
+        // of each pack's own colour as the outline stops those clusters from
+        // turning into black masses.
+        scaleByDistance: new Cesium.NearFarScalar(150_000, 1.0, 9_000_000, 0.42),
+        color: pointColor,
+        outlineColor: new Cesium.Color(
+          pointColor.red * 0.32,
+          pointColor.green * 0.32,
+          pointColor.blue * 0.32,
+          1.0,
+        ),
         outlineWidth: 1,
         // Road-level cameras sit under terrain and, once you are close enough
         // for the depth buffer to resolve metres, under photoreal buildings
