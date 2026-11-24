@@ -63,6 +63,11 @@
               <span class="layer-note" id="satellitesStatus"></span>
               <span class="layer-switch" aria-hidden="true"></span>
             </button>
+            <button class="layer-row" id="layerEvents" aria-pressed="false">
+              <span class="layer-name">EVENTS</span>
+              <span class="layer-note" id="eventsStatus">OFF</span>
+              <span class="layer-switch" aria-hidden="true"></span>
+            </button>
           </div>
           <div class="layers-group">
             <div class="layers-title">CAMERA TYPE</div>
@@ -101,6 +106,16 @@
               <button data-sat="science">SCI</button>
             </div>
           </div>
+          <div class="layers-group" id="eventsFilters" hidden>
+            <div class="layers-title">EVENT FILTER</div>
+            <div class="layer-seg" id="eventFilter" role="group" aria-label="Event filter">
+              <button data-event="all" class="on">ALL</button>
+              <button data-event="quake">QUAKES</button>
+              <button data-event="fire">FIRES</button>
+              <button data-event="storm">STORMS</button>
+              <button data-event="volcano">VOLCANO</button>
+            </div>
+          </div>
         </div>
 
         <div id="hint">Tap a dot to open that camera</div>
@@ -110,7 +125,7 @@
       <div id="credits">
         Camera data: Austin &middot; Calgary &middot; WSDOT &middot; TfL &middot; Fintraffic &middot;
         Statens vegvesen &middot; HK TD &middot; DriveBC &middot; NSW &middot; A22 &middot; DelDOT
-        &middot; Satellites: CelesTrak
+        &middot; Satellites: CelesTrak &middot; Events: USGS / NASA EONET
       </div>
     </div>
 
@@ -120,5 +135,6 @@
     <script src="app.js"></script>
     <script src="flights.js"></script>
     <script src="satellites.js"></script>
+    <script src="events.js"></script>
   </body>
 </html>

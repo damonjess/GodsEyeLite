@@ -92,8 +92,10 @@ class MainActivity : Activity() {
     private val repository = CctvRepository()
     private val flights = FlightRepository()
     private val satellites = SatelliteRepository()
+    private val events = EventsRepository()
     private val flightFetchInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
     private val satelliteFetchInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
+    private val eventFetchInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
     private val detailsInFlight: MutableSet<String> =
         java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<String, Boolean>())
     private val io: ExecutorService = Executors.newFixedThreadPool(4)
@@ -335,6 +337,23 @@ class MainActivity : Activity() {
                 }
             } finally {
                 satelliteFetchInFlight.set(false)
+            }
+        }
+    }
+
+    /** Fetches the keyless USGS + NASA EONET event feeds for the events layer. */
+    private fun loadEvents() {
+        if (io.isShutdown || !eventFetchInFlight.compareAndSet(false, true)) return
+        io.execute {
+            try {
+                val result = runCatching { events.load() }.getOrNull()
+                if (result.isNullOrEmpty()) {
+                    evaluate("window.GEVLite && GEVLite.eventsFailed && GEVLite.eventsFailed()")
+                } else {
+                    evaluate("window.GEVLite && GEVLite.setEvents(${events.toJson(result)})")
+                }
+            } finally {
+                eventFetchInFlight.set(false)
             }
         }
     }
@@ -618,6 +637,11 @@ class MainActivity : Activity() {
         @JavascriptInterface
         fun requestSatellites() {
             loadSatellites()
+        }
+
+        @JavascriptInterface
+        fun requestEvents() {
+            loadEvents()
         }
 
         @JavascriptInterface

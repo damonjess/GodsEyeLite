@@ -85,7 +85,24 @@
     cardWidthPx: 134,
     cardHeightPx: 130, // image + name bar + stem, for the overlap test
     refreshMs: 10_000,
-    layoutMs: 120,
+    // Cards only need to move when the camera is still; they are hidden while
+    // it moves, so one layout per second is enough for refreshes.
+    layoutMs: 1000,
+  };
+
+  /**
+   * Motion quality profile. Cesium's FXAA is expensive on a phone GPU when the
+   * globe fills the screen; keep it for globe scale and drop it at city scale.
+   * While the camera is moving, also render at a lower resolution, load fewer
+   * globe tiles and hide the thumbnail cards. Stills return to full quality
+   * once the camera settles.
+   */
+  const QUALITY = {
+    idleDelayMs: 220,
+    fxaaMinAltitudeM: 500_000,
+    movingSse: 5,
+    idleSse: 3,
+    movingResolutionScale: 0.8,
   };
 
   const state = {
@@ -105,6 +122,11 @@
     cameraType: 'all', // 'all' | 'still' | 'live'
     planesOn: true,
     satellitesOn: true,
+    cameraMoving: false,
+    lastCullCamera: null,
+    // Shared lock-on/chase state. Target objects are supplied by the flights
+    // and satellites layers and expose getCartesian/getHeading/getBack/getUp.
+    chase: { active: false, id: null, target: null, listener: null, pointer: null },
     ionToken: '',
     tokenApplied: false,
   };
@@ -187,8 +209,8 @@
     // The deep space tone shows while tiles are still streaming and through
     // any imagery gaps; the stock mid-blue reads as a loading artifact.
     viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString('#08101c');
-    // Smooths the hard pixel edges on aircraft and pins without the cost of
-    // MSAA on a phone GPU.
+    // FXAA is kept for globe scale only; applyQuality() disables it at city
+    // scale, where the post-process costs more than it adds on a phone GPU.
     viewer.scene.postProcessStages.fxaa.enabled = true;
     // Cesium's default sun light turns the 3D aircraft into black silhouettes
     // whenever the view is on the night side of the planet. A directional
@@ -232,6 +254,81 @@
       Cesium.Cartesian3.negate(viewer.camera.positionWC, lightDirection);
       Cesium.Cartesian3.normalize(lightDirection, lightDirection);
       modelLight.direction = lightDirection;
+    });
+
+    // Camera motion sets the quality profile: FXAA is skipped at city scale
+    // and while moving; tiles and resolution drop only during movement.
+    const motion = {
+      initialized: false,
+      lastPosition: new Cesium.Cartesian3(),
+      lastDirection: new Cesium.Cartesian3(),
+      lastMoveMs: 0,
+    };
+
+    function applyQuality() {
+      const scene = viewer.scene;
+      const moving = state.cameraMoving;
+      const altitude = viewer.camera.positionCartographic.height;
+      scene.postProcessStages.fxaa.enabled =
+        !moving && altitude > QUALITY.fxaaMinAltitudeM;
+      scene.globe.maximumScreenSpaceError = moving
+        ? QUALITY.movingSse
+        : QUALITY.idleSse;
+      viewer.resolutionScale = moving ? QUALITY.movingResolutionScale : 1.0;
+      const host = document.getElementById('thumbs');
+      if (host) host.classList.toggle('moving', moving);
+      if (state.thumbs) state.thumbs.lastLayoutMs = 0;
+    }
+
+    applyQuality();
+
+    viewer.scene.preRender.addEventListener(() => {
+      const camera = viewer.camera;
+      if (!motion.initialized) {
+        Cesium.Cartesian3.clone(camera.positionWC, motion.lastPosition);
+        Cesium.Cartesian3.clone(camera.directionWC, motion.lastDirection);
+        motion.initialized = true;
+        return;
+      }
+      // A chase camera moves every frame by design. Treat it as a still view so
+      // the tracked model and the globe around it keep full quality.
+      if (state.chase.active) {
+        Cesium.Cartesian3.clone(camera.positionWC, motion.lastPosition);
+        Cesium.Cartesian3.clone(camera.directionWC, motion.lastDirection);
+        if (state.cameraMoving) {
+          state.cameraMoving = false;
+          applyQuality();
+        }
+        return;
+      }
+      const moved =
+        !Cesium.Cartesian3.equalsEpsilon(
+          camera.positionWC,
+          motion.lastPosition,
+          0.0,
+          0.05,
+        ) ||
+        !Cesium.Cartesian3.equalsEpsilon(
+          camera.directionWC,
+          motion.lastDirection,
+          1e-7,
+          0.0,
+        );
+      if (moved) {
+        Cesium.Cartesian3.clone(camera.positionWC, motion.lastPosition);
+        Cesium.Cartesian3.clone(camera.directionWC, motion.lastDirection);
+        motion.lastMoveMs = performance.now();
+        if (!state.cameraMoving) {
+          state.cameraMoving = true;
+          applyQuality();
+        }
+      } else if (
+        state.cameraMoving &&
+        performance.now() - motion.lastMoveMs >= QUALITY.idleDelayMs
+      ) {
+        state.cameraMoving = false;
+        applyQuality();
+      }
     });
 
     const boot = document.getElementById('boot');
@@ -332,6 +429,7 @@
 
     state.positions.clear();
     state.pointRecords = [];
+    state.lastCullCamera = null;
     const collection = new Cesium.PointPrimitiveCollection();
     for (const camera of state.cameras) {
       if (!cameraMatches(camera)) continue;
@@ -363,7 +461,11 @@
         // Picking reads this back to identify which camera was tapped.
         id: camera.id,
       });
-      state.pointRecords.push({ primitive, position });
+      state.pointRecords.push({
+        primitive,
+        position,
+        positionSquared: Cesium.Cartesian3.magnitudeSquared(position),
+      });
     }
     viewer.scene.primitives.add(collection);
     state.points = collection;
@@ -382,12 +484,19 @@
   function refreshHorizonCulling() {
     const viewer = state.viewer;
     if (!viewer || !state.pointRecords.length) return;
-    const occluder = new Cesium.EllipsoidalOccluder(
-      Cesium.Ellipsoid.WGS84,
-      viewer.camera.positionWC,
-    );
+    const eye = viewer.camera.positionWC;
+    // The camera position alone decides which points are over the horizon;
+    // skip the loop entirely while the camera is still. This used to rebuild
+    // an EllipsoidalOccluder and touch all 12k pins every 120 ms.
+    if (state.lastCullCamera && Cesium.Cartesian3.equals(eye, state.lastCullCamera)) {
+      return;
+    }
+    if (!state.lastCullCamera) state.lastCullCamera = new Cesium.Cartesian3();
+    Cesium.Cartesian3.clone(eye, state.lastCullCamera);
     for (const record of state.pointRecords) {
-      record.primitive.show = occluder.isPointVisible(record.position);
+      const visible =
+        Cesium.Cartesian3.dot(record.position, eye) >= record.positionSquared;
+      if (record.primitive.show !== visible) record.primitive.show = visible;
     }
   }
 
@@ -451,17 +560,23 @@
   function wireThumbnails(viewer) {
     const host = document.getElementById('thumbs');
     if (!host) return;
-    state.thumbs = { host, byId: new Map(), lastLayoutMs: 0 };
-    // postRender, not a timer: the cards have to move with the globe, and one
-    // layout per frame would be wasted work on a phone GPU, hence the throttle.
+    state.thumbs = { host, byId: new Map(), lastLayoutMs: 0, lastCullMs: 0 };
+    // postRender, not a timer: the cards have to move with the globe. The
+    // horizon cull runs at ~8 Hz so far-side pins cannot shine through while
+    // the camera moves; the much more expensive card layout only runs when the
+    // camera is still, at 1 Hz.
     viewer.scene.postRender.addEventListener(() => {
       const now = performance.now();
+      if (now - state.thumbs.lastCullMs >= 120) {
+        state.thumbs.lastCullMs = now;
+        // Driven from here rather than camera.moveEnd because flyTo with a
+        // zero duration (RESET VIEW, and the test hook) never raises moveEnd,
+        // and a stale cull leaves the globe oddly empty.
+        refreshHorizonCulling();
+      }
+      if (state.cameraMoving || state.chase.active) return;
       if (now - state.thumbs.lastLayoutMs < THUMB.layoutMs) return;
       state.thumbs.lastLayoutMs = now;
-      // Driven from here rather than camera.moveEnd because flyTo with a
-      // zero duration (RESET VIEW, and the test hook) never raises moveEnd, and
-      // a stale cull leaves the globe oddly empty.
-      refreshHorizonCulling();
       layoutThumbnails(viewer, now);
     });
   }
@@ -480,7 +595,7 @@
    */
   function layoutThumbnails(viewer, now) {
     const thumbs = state.thumbs;
-    if (!thumbs) return;
+    if (!thumbs || state.cameraMoving) return;
     const scene = viewer.scene;
 
     if (
@@ -832,6 +947,116 @@
     log(message);
   }
 
+  // ── Lock-on / chase ────────────────────────────────────────────────────────
+
+  const chaseScratch = {
+    transform: new Cesium.Matrix4(),
+    offset: new Cesium.Cartesian3(),
+    camera: new Cesium.Cartesian3(),
+    direction: new Cesium.Cartesian3(),
+    right: new Cesium.Cartesian3(),
+    up4: new Cesium.Cartesian4(),
+    up: new Cesium.Cartesian3(),
+  };
+
+  /**
+   * Places the camera behind and above a moving target, using the target's
+   * local east/north/up frame. This avoids Camera.lookAt's locked transform and
+   * the jump that follows when the transform is released: any globe touch can
+   * simply stop the preRender updates and leave the camera where it is.
+   */
+  function chaseFrame() {
+    const chase = state.chase;
+    const target = chase.target;
+    if (!chase.active || !target || !state.viewer) return;
+
+    let position = null;
+    try {
+      position = target.getCartesian ? target.getCartesian() : null;
+    } catch (error) {
+      position = null;
+    }
+    if (!Cesium.defined(position)) return;
+
+    const heading = (target.getHeading && target.getHeading()) || 0;
+    const back = (target.getBack && target.getBack()) || 1000;
+    const up = (target.getUp && target.getUp()) || 300;
+    const transform = Cesium.Transforms.eastNorthUpToFixedFrame(
+      position,
+      Cesium.Ellipsoid.WGS84,
+      chaseScratch.transform,
+    );
+    chaseScratch.offset.x = -Math.sin(heading) * back;
+    chaseScratch.offset.y = -Math.cos(heading) * back;
+    chaseScratch.offset.z = up;
+    const cameraPosition = Cesium.Matrix4.multiplyByPoint(
+      transform,
+      chaseScratch.offset,
+      chaseScratch.camera,
+    );
+    const direction = Cesium.Cartesian3.subtract(
+      position,
+      cameraPosition,
+      chaseScratch.direction,
+    );
+    Cesium.Cartesian3.normalize(direction, direction);
+    const upWorld = Cesium.Matrix4.getColumn(transform, 2, chaseScratch.up4);
+    Cesium.Cartesian3.fromCartesian4(upWorld, chaseScratch.up);
+    Cesium.Cartesian3.normalize(chaseScratch.up, chaseScratch.up);
+
+    // A camera's up vector must be perpendicular to its view direction. Local
+    // up is not, especially when looking down at a satellite; using it directly
+    // flipped the camera away from Earth. Build a stable right/up basis.
+    const right = Cesium.Cartesian3.cross(direction, chaseScratch.up, chaseScratch.right);
+    Cesium.Cartesian3.normalize(right, right);
+    const cameraUp = Cesium.Cartesian3.cross(right, direction, chaseScratch.up);
+    Cesium.Cartesian3.normalize(cameraUp, cameraUp);
+    state.viewer.camera.setView({
+      destination: cameraPosition,
+      orientation: { direction, up: cameraUp },
+    });
+  }
+
+  function startChase(target) {
+    if (!state.viewer || !target || typeof target.getCartesian !== 'function') return false;
+    if (state.chase.active) stopChase();
+    state.chase.active = true;
+    state.chase.id = target.id || null;
+    state.chase.target = target;
+    state.chase.listener = chaseFrame;
+    state.viewer.scene.preRender.addEventListener(chaseFrame);
+    const thumbs = document.getElementById('thumbs');
+    if (thumbs) thumbs.classList.add('tracking');
+    state.chase.pointer = () => stopChase();
+    state.viewer.scene.canvas.addEventListener('pointerdown', state.chase.pointer, {
+      capture: true,
+      passive: true,
+    });
+    chaseFrame();
+    log('chase: ' + (target.name || target.id || 'target'));
+    return true;
+  }
+
+  function stopChase() {
+    const chase = state.chase;
+    if (!chase.active) return;
+    if (state.viewer && chase.listener) {
+      state.viewer.scene.preRender.removeEventListener(chase.listener);
+    }
+    if (state.viewer && chase.pointer) {
+      state.viewer.scene.canvas.removeEventListener('pointerdown', chase.pointer, {
+        capture: true,
+      });
+    }
+    const thumbs = document.getElementById('thumbs');
+    if (thumbs) thumbs.classList.remove('tracking');
+    chase.active = false;
+    chase.id = null;
+    chase.target = null;
+    chase.listener = null;
+    chase.pointer = null;
+  }
+
   // ── API used by Kotlin ─────────────────────────────────────────────────────
 
   window.GEVLite = {
@@ -854,6 +1079,7 @@
       setCameraType(type);
     },
     resetView() {
+      stopChase();
       if (!state.viewer) return;
       const camera = state.viewer.camera;
       const p = camera.pitch;
@@ -877,11 +1103,28 @@
     getViewer() {
       return state.viewer;
     },
+    isMoving() {
+      return state.cameraMoving;
+    },
+    /** Shared lock-on camera used by the flights and satellites layers. */
+    startChase(target) {
+      return startChase(target);
+    },
+    stopChase() {
+      stopChase();
+    },
+    isChasing(id) {
+      return !!(state.chase.active && (!id || state.chase.id === id));
+    },
+    chaseStats() {
+      return { active: state.chase.active, id: state.chase.id };
+    },
     /**
      * Fly to a point. Not used by the UI — it is the hook the device test does
      * its screenshot checks through, where dragging the globe is impractical.
      */
     flyTo(lat, lon, height) {
+      stopChase();
       if (!state.viewer) return false;
       state.viewer.camera.flyTo({
         destination: Cesium.Cartesian3.fromDegrees(lon, lat, height),
@@ -916,6 +1159,8 @@
           ? Math.round(viewer.camera.positionCartographic.height / 1000)
           : null,
         thumbnails: state.thumbs ? state.thumbs.byId.size : 0,
+        chasing: state.chase.active,
+        chaseTarget: state.chase.id,
       };
     },
   };

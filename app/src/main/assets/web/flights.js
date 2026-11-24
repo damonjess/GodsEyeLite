@@ -54,11 +54,15 @@
     modelUrl: 'plane.glb',
     modelScale: 2.4,
     modelMax: 50,
+    // While the camera moves, only the nearest few get expensive 3D models;
+    // the rest keep their icons. At rest the whole visible set is 3D.
+    modelMovingMax: 18,
     modelRangeM: 100_000,
     modelMinPixels: 64,
     heliModelUrl: 'helicopter.glb',
     heliModelScale: 2.2,
     heliModelMax: 20,
+    heliMovingMax: 4,
     heliModelRangeM: 100_000,
     heliModelMinPixels: 80,
     // Contrail: only high, fast jets. The line is dead-reckoned backwards from
@@ -901,6 +905,13 @@
       #flightCard .fc-stats { display: flex; justify-content: space-between; margin-top: 9px; }
       #flightCard .fc-stats b { display: block; font-size: 13px; }
       #flightCard .fc-stats span { color: #9a9ab0; font-size: 9px; }
+      #flightCard .fc-actions { display: flex; justify-content: flex-end; margin-top: 8px; }
+      #flightCard .fc-chase {
+        pointer-events: auto; background: rgba(17, 24, 32, 0.94); border: 1px solid #35e0c8;
+        color: #35e0c8; border-radius: 5px; padding: 5px 10px; font: 700 10px monospace;
+        letter-spacing: 1px;
+      }
+      #flightCard .fc-chase.on { background: #35e0c8; color: #071014; }
     `;
     document.head.appendChild(style);
 
@@ -935,10 +946,12 @@
         <div><b id="fcSpd"></b><span>SPEED</span></div>
         <div><b id="fcHdg"></b><span>HEADING</span></div>
         <div><b id="fcVs"></b><span>CLIMB</span></div>
-      </div>`;
+      </div>
+      <div class="fc-actions"><button class="fc-chase" id="fcChase" type="button">CHASE</button></div>`;
     document.body.appendChild(card);
     state.ui.card = card;
     document.getElementById('fcClose').addEventListener('click', clearSelection);
+    document.getElementById('fcChase').addEventListener('click', toggleChase);
     // Planespotters asks that the photo links to its page. The link opens in
     // the phone's browser (Kotlin checks the host), never inside the globe.
     document.getElementById('fcPhotoBox').addEventListener('click', (event) => {
@@ -1342,22 +1355,41 @@
     );
   }
 
+  const aircraftCullSphere = new Cesium.BoundingSphere();
+
   function rankByDistance() {
-    const camera = state.viewer.camera.positionWC;
+    const camera = state.viewer.camera;
+    const eye = camera.positionWC;
+    const cullingVolume = camera.frustum.computeCullingVolume(
+      eye,
+      camera.directionWC,
+      camera.upWC,
+    );
     const ranked = [];
     for (const rec of state.byHex.values()) {
       if (!rec.visible || !rec.cart) continue;
-      ranked.push({ rec, d: Cesium.Cartesian3.distance(camera, rec.cart) });
+      // Do not spend 3D models or tags on aircraft outside the view. This is
+      // a wide 2 km margin so a model does not pop in right at the screen edge.
+      aircraftCullSphere.center = rec.cart;
+      aircraftCullSphere.radius = 2000;
+      if (
+        cullingVolume.computeVisibility(aircraftCullSphere) ===
+        Cesium.Intersect.OUTSIDE
+      ) {
+        continue;
+      }
+      ranked.push({ rec, d: Cesium.Cartesian3.distance(eye, rec.cart) });
     }
     ranked.sort((a, b) => a.d - b.d);
     return ranked;
   }
 
   /** Gives a pool's models to the closest matching aircraft. */
-  function assignModelsToPool(pool, ranked, matching, rangeM) {
+  function assignModelsToPool(pool, ranked, matching, rangeM, limit) {
     if (!pool.length) return;
     const near = ranked.filter((n) => matching(n.rec) && n.d <= rangeM);
-    const want = new Set(near.slice(0, pool.length).map((n) => n.rec.hex));
+    const count = Math.min(pool.length, limit == null ? pool.length : limit);
+    const want = new Set(near.slice(0, count).map((n) => n.rec.hex));
 
     // Free models whose aircraft is no longer among the nearest.
     for (const entry of pool) {
@@ -1383,8 +1415,25 @@
   }
 
   function assignModels(ranked) {
-    assignModelsToPool(state.pool, ranked, (rec) => !rec.heli, CFG.modelRangeM);
-    assignModelsToPool(state.heliPool, ranked, (rec) => !!rec.heli, CFG.heliModelRangeM);
+    const moving = !!(
+      window.GEVLite &&
+      typeof window.GEVLite.isMoving === 'function' &&
+      window.GEVLite.isMoving()
+    );
+    assignModelsToPool(
+      state.pool,
+      ranked,
+      (rec) => !rec.heli,
+      CFG.modelRangeM,
+      moving ? CFG.modelMovingMax : state.pool.length,
+    );
+    assignModelsToPool(
+      state.heliPool,
+      ranked,
+      (rec) => !!rec.heli,
+      CFG.heliModelRangeM,
+      moving ? CFG.heliMovingMax : state.heliPool.length,
+    );
   }
 
   function releaseEntry(entry) {
@@ -1553,6 +1602,7 @@
   function select(hex) {
     const rec = state.byHex.get(hex);
     if (!rec || !rec.visible) return;
+    window.dispatchEvent(new CustomEvent('gev:dismissCards', { detail: 'flight' }));
     clearSelection();
     state.selectedHex = hex;
     rec.bb.scale = (CFG.iconPx * 1.45) / CFG.iconCanvasPx;
@@ -1576,6 +1626,32 @@
     requestDetails(rec);
   }
 
+  /** The shared chase controller lives in app.js; this supplies the plane. */
+  function toggleChase() {
+    const rec = state.selectedHex ? state.byHex.get(state.selectedHex) : null;
+    const api = window.GEVLite;
+    if (!rec || !api) return;
+    const id = 'flight:' + rec.hex;
+    if (typeof api.isChasing === 'function' && api.isChasing(id)) {
+      if (typeof api.stopChase === 'function') api.stopChase();
+    } else if (typeof api.startChase === 'function') {
+      api.startChase({
+        id,
+        kind: 'aircraft',
+        name: rec.callsign || rec.hex,
+        getCartesian: () =>
+          rec.cart ||
+          (rec.now
+            ? Cesium.Cartesian3.fromDegrees(rec.now.lon, rec.now.lat, rec.now.alt)
+            : null),
+        getHeading: () => Cesium.Math.toRadians(rec.track || 0),
+        getBack: () => 650,
+        getUp: () => 190,
+      });
+    }
+    updateCard();
+  }
+
   function requestDetails(rec) {
     const seen = state.details.get(rec.hex);
     if (seen && seen.requested) return;
@@ -1597,6 +1673,14 @@
 
   function clearSelection() {
     const rec = state.selectedHex ? state.byHex.get(state.selectedHex) : null;
+    const api = window.GEVLite;
+    if (
+      api &&
+      typeof api.isChasing === 'function' &&
+      api.isChasing('flight:' + state.selectedHex)
+    ) {
+      if (typeof api.stopChase === 'function') api.stopChase();
+    }
     if (rec) {
       rec.bb.scale = CFG.iconPx / CFG.iconCanvasPx;
       rec.bb.image = iconFor(rec, false);
@@ -1726,6 +1810,18 @@
     const fpm = Math.round(rec.climb / 0.00508 / 50) * 50;
     set('fcVs', (fpm > 0 ? '+' : '') + fpm + ' fpm');
 
+    const chaseButton = $('fcChase');
+    if (chaseButton) {
+      const api = window.GEVLite;
+      const chasing =
+        !!api &&
+        typeof api.isChasing === 'function' &&
+        api.isChasing('flight:' + rec.hex);
+      const label = chasing ? 'RELEASE' : 'CHASE';
+      if (chaseButton.textContent !== label) chaseButton.textContent = label;
+      chaseButton.classList.toggle('on', chasing);
+    }
+
     // Aircraft photo (Planespotters). Credit and link are required by its terms.
     const box = $('fcPhotoBox');
     const photo = details.photo;
@@ -1815,6 +1911,9 @@
     state.chips = viewer.scene.primitives.add(new Cesium.BillboardCollection());
     state.labels = viewer.scene.primitives.add(new Cesium.LabelCollection());
     state.contrails = viewer.scene.primitives.add(new Cesium.PolylineCollection());
+    window.addEventListener('gev:dismissCards', (event) => {
+      if (event.detail !== 'flight') clearSelection();
+    });
     // Colours are shared, materials are not: Polyline#_destroy() destroys its
     // material, so a shared instance would break every other contrail as soon
     // as one aircraft left the view.
@@ -1898,6 +1997,24 @@
   window.GEVLite.setFlightDetails = setFlightDetails;
   window.GEVLite.setFlightsEnabled = setEnabled;
   window.GEVLite.flightsEnabled = () => state.enabled;
+  // Programmatic selection hook for tests and future deep links.
+  window.GEVLite.selectNearestFlight = () => {
+    if (!state.enabled || !state.viewer) return null;
+    const eye = state.viewer.camera.positionWC;
+    let best = null;
+    let bestDistance = Infinity;
+    for (const rec of state.byHex.values()) {
+      if (!rec.visible || !rec.cart) continue;
+      const distance = Cesium.Cartesian3.distanceSquared(eye, rec.cart);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = rec;
+      }
+    }
+    if (!best) return null;
+    select(best.hex);
+    return { hex: best.hex, callsign: best.callsign || '' };
+  };
   window.GEVLite.flightStats = () => ({
     enabled: state.enabled,
     drawn: state.byHex.size,

@@ -44,6 +44,7 @@
     loaded: false,
     note: '',
     selectionLabel: null,
+    orbit: null,
     timer: 0,
     ui: {},
   };
@@ -177,6 +178,13 @@
       #satCard .sc-stats { display: flex; gap: 16px; margin-top: 10px; }
       #satCard .sc-stats b { display: block; font-size: 13px; }
       #satCard .sc-stats span { color: #9a9ab0; font-size: 8px; }
+      #satCard .sc-actions { display: flex; justify-content: flex-end; margin-top: 9px; }
+      #satCard .sc-track {
+        pointer-events: auto; background: rgba(17, 24, 32, 0.94); border: 1px solid #35e0c8;
+        color: #35e0c8; border-radius: 5px; padding: 5px 10px; font: 700 10px monospace;
+        letter-spacing: 1px;
+      }
+      #satCard .sc-track.on { background: #35e0c8; color: #071014; }
     `;
     document.head.appendChild(style);
 
@@ -193,10 +201,12 @@
         <div><b id="scAlt"></b><span>ALTITUDE</span></div>
         <div><b id="scSpeed"></b><span>SPEED</span></div>
         <div><b id="scPeriod"></b><span>PERIOD</span></div>
-      </div>`;
+      </div>
+      <div class="sc-actions"><button class="sc-track" id="scTrack" type="button">ORBIT</button></div>`;
     document.body.appendChild(card);
     state.ui.card = card;
     document.getElementById('scClose').addEventListener('click', clearSelection);
+    document.getElementById('scTrack').addEventListener('click', toggleOrbit);
   }
 
   function wireFilterUi() {
@@ -243,8 +253,18 @@
   }
 
   function clearAll() {
+    const api = window.GEVLite;
+    if (
+      api &&
+      state.selectedId &&
+      typeof api.isChasing === 'function' &&
+      api.isChasing('sat:' + state.selectedId)
+    ) {
+      if (typeof api.stopChase === 'function') api.stopChase();
+    }
     if (state.collection) state.collection.removeAll();
     if (state.labels) state.labels.removeAll();
+    if (state.orbit) state.orbit.removeAll();
     state.items = [];
     state.byId.clear();
     state.selectionLabel = null;
@@ -382,10 +402,12 @@
   function select(id) {
     const rec = state.byId.get(id);
     if (!rec || !rec.visible) return;
+    window.dispatchEvent(new CustomEvent('gev:dismissCards', { detail: 'sat' }));
     clearSelection();
     state.selectedId = id;
     rec.bb.scale = CFG.selectedScale;
     rec.bb.color = Cesium.Color.WHITE;
+    buildOrbit(rec);
     state.selectionLabel = state.labels.add({
       text: rec.name,
       font: '600 11px monospace',
@@ -403,6 +425,16 @@
 
   function clearSelection() {
     const rec = state.selectedId ? state.byId.get(state.selectedId) : null;
+    const api = window.GEVLite;
+    if (
+      api &&
+      state.selectedId &&
+      typeof api.isChasing === 'function' &&
+      api.isChasing('sat:' + state.selectedId)
+    ) {
+      if (typeof api.stopChase === 'function') api.stopChase();
+    }
+    if (state.orbit) state.orbit.removeAll();
     if (rec) {
       rec.bb.scale = CFG.iconScale;
       rec.bb.color = colorFor(rec.category);
@@ -430,6 +462,80 @@
     // The TLE's mean motion is rev/day; 86400 / rev/day gives minutes/orbit.
     const revsPerDay = rec.satrec && rec.satrec.no ? rec.satrec.no * 229.183118 : 0;
     set('scPeriod', revsPerDay ? Math.round(1440 / revsPerDay) + ' min' : '—');
+
+    const orbitButton = document.getElementById('scTrack');
+    if (orbitButton) {
+      const api = window.GEVLite;
+      const orbiting =
+        !!api &&
+        typeof api.isChasing === 'function' &&
+        api.isChasing('sat:' + rec.id);
+      const label = orbiting ? 'RELEASE' : 'ORBIT';
+      if (orbitButton.textContent !== label) orbitButton.textContent = label;
+      orbitButton.classList.toggle('on', orbiting);
+    }
+  }
+
+  /** Draws one full orbital period from the TLE, in the satellite's colour. */
+  function buildOrbit(rec) {
+    if (!state.orbit || !rec || !rec.satrec || typeof satellite === 'undefined') return;
+    state.orbit.removeAll();
+    try {
+      const revsPerDay = rec.satrec.no ? rec.satrec.no * 229.183118 : 0;
+      const periodMs = revsPerDay ? (1440 / revsPerDay) * 60_000 : 90 * 60_000;
+      const start = Date.now();
+      const positions = [];
+      const samples = 180;
+      for (let i = 0; i <= samples; i++) {
+        const date = new Date(start + (periodMs * i) / samples);
+        const posVel = satellite.propagate(rec.satrec, date);
+        if (!posVel || !posVel.position || typeof posVel.position === 'boolean') continue;
+        const geo = satellite.eciToGeodetic(posVel.position, satellite.gstime(date));
+        positions.push(
+          Cesium.Cartesian3.fromDegrees(
+            satellite.degreesLong(geo.longitude),
+            satellite.degreesLat(geo.latitude),
+            geo.height * 1000,
+          ),
+        );
+      }
+      if (positions.length < 2) return;
+      state.orbit.add({
+        positions,
+        width: 1.4,
+        arcType: Cesium.ArcType.NONE,
+        material: Cesium.Material.fromType('Color', {
+          uniforms: { color: colorFor(rec.category).withAlpha(0.55) },
+        }),
+      });
+    } catch (error) {
+      log('orbit failed: ' + (error && error.message));
+      state.orbit.removeAll();
+    }
+  }
+
+  function toggleOrbit() {
+    const rec = state.selectedId ? state.byId.get(state.selectedId) : null;
+    const api = window.GEVLite;
+    if (!rec || !api) return;
+    const id = 'sat:' + rec.id;
+    if (typeof api.isChasing === 'function' && api.isChasing(id)) {
+      if (typeof api.stopChase === 'function') api.stopChase();
+    } else if (typeof api.startChase === 'function') {
+      api.startChase({
+        id,
+        kind: 'satellite',
+        name: rec.name,
+        getCartesian: () => rec.cart,
+        getHeading: () => 0,
+        // Look steeply down at the satellite from above. The previous shallow
+        // angle pointed away from Earth at MEO/GEO altitudes; this keeps the
+        // satellite centred with the Earth's limb in the lower frame.
+        getBack: () => Math.max(250_000, (rec.altM || 0) * 0.02),
+        getUp: () => Math.max(900_000, (rec.altM || 0) * 0.14),
+      });
+    }
+    updateCard();
   }
 
   // ── Start ──────────────────────────────────────────────────────────────────
@@ -460,6 +566,10 @@
     if (row && row.getAttribute('aria-pressed') === 'false') state.enabled = false;
     state.collection = viewer.scene.primitives.add(new Cesium.BillboardCollection());
     state.labels = viewer.scene.primitives.add(new Cesium.LabelCollection());
+    state.orbit = viewer.scene.primitives.add(new Cesium.PolylineCollection());
+    window.addEventListener('gev:dismissCards', (event) => {
+      if (event.detail !== 'sat') clearSelection();
+    });
     injectUi();
     wireFilterUi();
 
@@ -507,6 +617,24 @@
   window.GEVLite.setSatellites = setSatellites;
   window.GEVLite.satellitesFailed = satellitesFailed;
   window.GEVLite.setSatellitesEnabled = setEnabled;
+  // Programmatic selection hook for tests and future deep links.
+  window.GEVLite.selectNearestSatellite = () => {
+    if (!state.enabled || !state.viewer) return null;
+    const eye = state.viewer.camera.positionWC;
+    let best = null;
+    let bestDistance = Infinity;
+    for (const rec of state.items) {
+      if (!rec.visible || !rec.cart) continue;
+      const distance = Cesium.Cartesian3.distanceSquared(eye, rec.cart);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = rec;
+      }
+    }
+    if (!best) return null;
+    select(best.id);
+    return { id: best.id, name: best.name };
+  };
   window.GEVLite.satelliteStats = () => ({
     enabled: state.enabled,
     loaded: state.items.length,
@@ -514,6 +642,7 @@
     positioned: state.items.filter((rec) => !!rec.cart).length,
     filter: state.filter,
     selected: state.selectedId,
+    orbit: !!(state.orbit && state.orbit.length),
     note: state.note,
     sample: state.items[0] && state.items[0].cart
       ? {

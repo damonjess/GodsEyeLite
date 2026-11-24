@@ -308,6 +308,14 @@ body {
   inset: 0;
   overflow: hidden;
   pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+/* While the camera moves, cards would chase a changing view and force image
+   decodes; hide them and lay them out again once the camera settles. */
+#thumbs.moving,
+#thumbs.tracking {
+  opacity: 0;
 }
 
 /* Anchored at the camera's projected point; the card hangs above it and the
