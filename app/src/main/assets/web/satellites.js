@@ -225,6 +225,20 @@
       button.classList.toggle('on', active);
       button.setAttribute('aria-pressed', String(active));
     }
+    const counts = { station: 0, nav: 0, weather: 0, military: 0, science: 0 };
+    for (const rec of state.items) counts[rec.category] += 1;
+    const note = document.getElementById('satelliteCounts');
+    if (note) {
+      note.textContent = state.items.length
+        ? [
+            'STN ' + counts.station,
+            'NAV ' + counts.nav,
+            'WX ' + counts.weather,
+            'MIL ' + counts.military,
+            'SCI ' + counts.science,
+          ].join(' \u00b7 ')
+        : '';
+    }
   }
 
   function setFilter(filter) {
@@ -327,6 +341,7 @@
 
     state.loaded = true;
     setNote('');
+    renderFilterUi();
     if (!state.enabled) {
       for (const rec of state.items) {
         rec.bb.show = false;

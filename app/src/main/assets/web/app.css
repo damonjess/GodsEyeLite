@@ -582,6 +582,17 @@ body {
   color: #e8e8f0;
 }
 
+/* Live category totals, so the filter labels are not the only clue about how
+   much of the catalog each one contains. Blank until the TLE catalog arrives. */
+.sat-counts {
+  margin-top: 5px;
+  color: #9a9ab0;
+  font-family: monospace;
+  font-size: 8px;
+  letter-spacing: 0.3px;
+  line-height: 1.4;
+}
+
 /* Callsign/registration/type search for the aircraft layer. */
 .layer-search {
   box-sizing: border-box;
@@ -634,6 +645,11 @@ body {
   color: #b8b8cc;
   font-size: 9px;
   line-height: 1.35;
+}
+
+#credits a {
+  color: #c8c8d8;
+  pointer-events: auto;
 }
 
 /* ── Camera thumbnails ──────────────────────────────────────────────────────

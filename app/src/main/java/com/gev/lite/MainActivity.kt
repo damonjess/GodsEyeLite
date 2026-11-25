@@ -102,9 +102,11 @@ class MainActivity : Activity() {
     private val flights = FlightRepository()
     private val satellites = SatelliteRepository()
     private val events = EventsRepository()
+    private val weather = WeatherRepository()
     private val flightFetchInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
     private val satelliteFetchInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
     private val eventFetchInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
+    private val weatherFetchInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
     private val detailsInFlight: MutableSet<String> =
         java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<String, Boolean>())
     private val io: ExecutorService = Executors.newFixedThreadPool(4)
@@ -371,6 +373,23 @@ class MainActivity : Activity() {
                 }
             } finally {
                 eventFetchInFlight.set(false)
+            }
+        }
+    }
+
+    /** Fetches current conditions for the camera cities from Open-Meteo. */
+    private fun loadWeather() {
+        if (io.isShutdown || !weatherFetchInFlight.compareAndSet(false, true)) return
+        io.execute {
+            try {
+                val result = runCatching { weather.load() }.getOrNull()
+                if (result.isNullOrEmpty()) {
+                    evaluate("window.GEVLite && GEVLite.weatherFailed && GEVLite.weatherFailed()")
+                } else {
+                    evaluate("window.GEVLite && GEVLite.setWeather(${weather.toJson(result)})")
+                }
+            } finally {
+                weatherFetchInFlight.set(false)
             }
         }
     }
@@ -687,16 +706,22 @@ class MainActivity : Activity() {
         }
 
         @JavascriptInterface
+        fun requestWeather() {
+            loadWeather()
+        }
+
+        @JavascriptInterface
         fun requestFlightDetails(hex: String, callsign: String, lat: Double, lon: Double) {
             loadFlightDetails(hex, callsign, lat, lon)
         }
 
-        /** Opens a Planespotters photo page in the browser. Anything else is ignored. */
+        /** Opens an allow-listed external attribution/photo page in the browser. */
         @JavascriptInterface
         fun openLink(url: String) {
             val uri = android.net.Uri.parse(url)
             val host = uri.host.orEmpty()
-            val allowed = host == "planespotters.net" || host.endsWith(".planespotters.net")
+            val allowed = host == "planespotters.net" || host.endsWith(".planespotters.net") ||
+                host == "open-meteo.com" || host.endsWith(".open-meteo.com")
             if (uri.scheme != "https" || !allowed) return
             this@MainActivity.runOnUiThread {
                 runCatching {

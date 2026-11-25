@@ -66,6 +66,11 @@
               <span class="layer-note" id="satellitesStatus"></span>
               <span class="layer-switch" aria-hidden="true"></span>
             </button>
+            <button class="layer-row" id="layerWeather" aria-pressed="false">
+              <span class="layer-name">WEATHER</span>
+              <span class="layer-note" id="weatherStatus">OFF</span>
+              <span class="layer-switch" aria-hidden="true"></span>
+            </button>
             <button class="layer-row" id="layerEvents" aria-pressed="false">
               <span class="layer-name">EVENTS</span>
               <span class="layer-note" id="eventsStatus">OFF</span>
@@ -109,6 +114,7 @@
               <button data-sat="military">MIL</button>
               <button data-sat="science">SCI</button>
             </div>
+            <div class="sat-counts" id="satelliteCounts" aria-live="polite"></div>
           </div>
           <div class="layers-group" id="eventsFilters" hidden>
             <div class="layers-title">EVENT FILTER</div>
@@ -200,6 +206,7 @@
         Camera data: Austin &middot; Calgary &middot; WSDOT &middot; TfL &middot; Fintraffic &middot;
         Statens vegvesen &middot; HK TD &middot; DriveBC &middot; NSW &middot; A22 &middot; DelDOT
         &middot; Satellites: CelesTrak &middot; Events: USGS / NASA EONET
+        &middot; Weather: <a href="https://open-meteo.com/" data-weather-credit target="_blank" rel="noopener">Open-Meteo</a>
       </div>
     </div>
 
@@ -209,6 +216,7 @@
     <script src="app.js"></script>
     <script src="flights.js"></script>
     <script src="satellites.js"></script>
+    <script src="weather.js"></script>
     <script src="events.js"></script>
   </body>
 </html>

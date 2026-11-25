@@ -136,14 +136,29 @@ the radius regardless of the alert-role filters.
 ## Satellites
 
 Satellites are fetched from CelesTrak's public GP element sets (space stations,
-weather, GPS/GLONASS/Galileo/BeiDou navigation, military and science groups). The
-TLEs are propagated locally in the WebView with
+weather, GPS/GLONASS/Galileo/BeiDou navigation, military and science groups),
+primarily through the automated [satvisor-data](https://github.com/satvisorcom/satvisor-data)
+TLE mirror and with CelesTrak as a fallback. The mirror avoids re-downloading the
+same group files from CelesTrak when the app restarts, which is what triggers its
+temporary 403 blocks. The TLEs are propagated locally in the WebView with
 [`satellite.js`](https://github.com/shashwatak/satellite-js) (MIT), so positions
 update every second without a per-satellite tracking API. The satellite layer
-has its own switch and **STN / NAV / WX / MIL / SCI** filters; tapping a
-satellite opens its name, NORAD ID, altitude, speed and orbital period, and
+has its own switch and **STN / NAV / WX / MIL / SCI** filters, with live category
+totals beneath them once the catalog loads; tapping a satellite opens its name,
+NORAD ID, altitude, speed and orbital period, and
 **ORBIT** tracks it with an orbit ring. The catalog is deliberately a useful
 subset rather than every object in orbit.
+
+## Weather
+
+The **WEATHER** layer shows current conditions for a representative city in
+each camera pack (Austin, Calgary, Washington, London, Finland, Norway, Hong
+Kong, BC, NSW, A22, Delaware and California). It uses the keyless Open-Meteo
+`current` endpoint for temperature, WMO condition and wind, fetches all twelve
+places in one request, and refreshes every 15 minutes while the layer is on.
+Tapping a city badge opens a details card with a **FLY TO** action. Weather data
+by [Open-Meteo.com](https://open-meteo.com/) (CC BY 4.0); the attribution link is
+shown in the app's credits and in the card.
 
 ## Events
 
@@ -205,6 +220,12 @@ Verified while building this:
   the service's end-to-end history write were not triggered on-device;
   notification permission was granted with adb rather than through the system
   prompt.
+- After CelesTrak temporarily blocked the test IP for excessive group downloads,
+  the satellite layer was re-checked on the Xiaomi through the mirror: 282
+  satellites loaded, propagated, and rendered, with all five categories present.
+- The WEATHER layer was checked on the Xiaomi: Open-Meteo returned all twelve
+  camera-city readings, their badges rendered on the globe, and a tapped city
+  opened its current-conditions card.
 - The ion token and Cesium 3D buildings were not re-tested on this pass.
 
 ## Limitations

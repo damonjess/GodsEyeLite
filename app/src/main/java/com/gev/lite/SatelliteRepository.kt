@@ -15,12 +15,17 @@ data class Satellite(
 )
 
 /**
- * Fetches a deliberately small, useful satellite catalog from CelesTrak.
+ * Fetches a deliberately small, useful satellite catalog based on CelesTrak's
+ * public GP element sets.
  *
- * CelesTrak publishes keyless, public GP element sets. The WebView receives
- * the TLEs and propagates them locally with satellite.js, so the app does not
- * need to poll a tracking API for every satellite position.
+ * The primary source is the automated satvisor-data mirror on GitHub. CelesTrak
+ * rate-limits and temporarily blocks IPs that re-download the same group files
+ * too often, so it is only a fallback when the static mirror is unavailable.
+ * This keeps the layer working through a CelesTrak block while respecting its
+ * usage policy.
  *
+ * The WebView receives the TLEs and propagates them locally with satellite.js,
+ * so the app does not need to poll a tracking API for every satellite position.
  * There is no CORS problem here because Kotlin owns the network; the WebView
  * only sees the resulting JSON over the bridge. The groups are fetched in
  * parallel and deduplicated by NORAD ID, keeping the first, more specific
@@ -33,6 +38,11 @@ internal class SatelliteRepository {
         private const val TIMEOUT_MS = 10_000
         private const val CACHE_TTL_MS = 6 * 60 * 60 * 1000L
         private const val MAX_SATELLITES = 800
+        // Static, automated mirror of the same CelesTrak groups. Its TLE files
+        // are refreshed every 2-12 hours; a static file is also friendlier to a
+        // client that restarts often than a keyed query endpoint.
+        private const val TLE_MIRROR_URL =
+            "https://raw.githubusercontent.com/satvisorcom/satvisor-data/master/celestrak/tle/%s.tle"
         private const val CELESTRAK_URL =
             "https://celestrak.org/NORAD/elements/gp.php?GROUP=%s&FORMAT=tle"
 
@@ -69,7 +79,7 @@ internal class SatelliteRepository {
         try {
             val futures = GROUPS.map { (group, category) ->
                 pool.submit<Pair<String, String?>> {
-                    category to httpGet(String.format(Locale.US, CELESTRAK_URL, group))
+                    category to fetchGroup(group)
                 }
             }
             for (future in futures) {
@@ -87,6 +97,12 @@ internal class SatelliteRepository {
             cachedAtMs = now
         }
         return list
+    }
+
+    private fun fetchGroup(group: String): String? {
+        val mirror = httpGet(String.format(Locale.US, TLE_MIRROR_URL, group))
+        if (!mirror.isNullOrBlank()) return mirror
+        return httpGet(String.format(Locale.US, CELESTRAK_URL, group))
     }
 
     /**
