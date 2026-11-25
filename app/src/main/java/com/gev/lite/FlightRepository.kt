@@ -377,13 +377,17 @@ internal class FlightRepository {
     /** Maps a registered owner/operator to a short service tag. */
     internal fun serviceOwnerReason(owner: String, flagCode: String = ""): String {
         val text = "$owner $flagCode"
+        val flag = flagCode.trim().uppercase(Locale.US)
         return when {
+            // UKP is the UK Home Office police operator flag. It must win over
+            // a contractor owner that also operates HEMS aircraft.
+            flag == "UKP" -> "POLICE"
             POLICE_OWNER.containsMatchIn(text) -> "POLICE"
             MEDICAL_OWNER.containsMatchIn(text) -> "MEDICAL"
             MEDICAL_CONTRACTOR_OWNER.containsMatchIn(text) -> "MEDICAL"
             FIRE_OWNER.containsMatchIn(text) -> "FIRE"
             RESCUE_OWNER.containsMatchIn(text) -> "RESCUE"
-            else -> when (flagCode.trim().uppercase(Locale.US)) {
+            else -> when (flag) {
                 "NHZ", "HEMS", "HELIMED", "MEDEVAC", "LIFEGUARD" -> "MEDICAL"
                 "NPAS", "POLICE" -> "POLICE"
                 else -> ""

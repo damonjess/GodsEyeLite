@@ -32,6 +32,10 @@ class FlightRepositoryTest {
             repository.serviceOwnerReason("Babcock MCS Onshore", "RHD"),
         )
         assertEquals(
+            "POLICE",
+            repository.serviceOwnerReason("Babcock MCS Onshore", "UKP"),
+        )
+        assertEquals(
             "MEDICAL",
             repository.serviceOwnerReason("Babcock Mission Critical Services Onshore Ltd"),
         )
