@@ -154,6 +154,38 @@
             <button data-km="25" class="on" aria-pressed="true">25 KM</button>
             <button data-km="50" aria-pressed="false">50 KM</button>
           </div>
+          <div class="sw-roles-label">ALERT ROLES</div>
+          <div
+            id="serviceWatchRoles"
+            class="layer-seg sw-roles"
+            role="group"
+            aria-label="Background alert roles"
+          >
+            <button data-role="MEDEVAC" class="on" aria-pressed="true" title="Medical and air ambulance">MEDEVAC</button>
+            <button data-role="POLICE" class="on" aria-pressed="true" title="Police aircraft">POLICE</button>
+            <button data-role="FIRE" class="on" aria-pressed="true" title="Fire aircraft">FIRE</button>
+            <button data-role="RESCUE" class="on" aria-pressed="true" title="Rescue aircraft">RESCUE</button>
+            <button data-role="OTHER" class="on" aria-pressed="true" title="Other emergency squawks">OTHER</button>
+          </div>
+          <button
+            id="serviceWatchAlerts"
+            class="layer-row sw-alert-row"
+            aria-pressed="false"
+            aria-busy="false"
+            title="Start optional background alerts for this location and radius"
+          >
+            <span class="layer-name">BACKGROUND ALERTS</span>
+            <span class="layer-note" id="serviceWatchAlertsStatus">OFF</span>
+            <span class="layer-switch" aria-hidden="true"></span>
+          </button>
+          <div class="sw-history">
+            <div class="sw-history-head">
+              <span>RECENT ALERTS</span>
+              <span id="serviceWatchHistoryCount" class="sw-history-count">0</span>
+              <button id="serviceWatchHistoryClear" type="button" hidden>CLEAR</button>
+            </div>
+            <div id="serviceWatchHistoryList" class="sw-history-list" hidden></div>
+          </div>
           <div id="serviceWatchList" class="sw-list"></div>
           <div id="serviceWatchFoot" class="sw-foot">
             Distances from map centre &middot; updates with flights

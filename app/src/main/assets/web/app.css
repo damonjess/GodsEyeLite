@@ -146,7 +146,7 @@ body {
 #serviceWatchPanel {
   box-sizing: border-box;
   width: min(320px, calc(100vw - 24px));
-  max-height: min(52vh, 430px);
+  max-height: min(60vh, 500px);
   margin-top: 8px;
   padding: 9px 10px 10px;
   display: flex;
@@ -210,6 +210,156 @@ body {
 
 .sw-radius {
   margin-top: 6px;
+}
+
+.sw-roles-label {
+  margin-top: 7px;
+  color: #7a7a92;
+  font-family: monospace;
+  font-size: 8px;
+  letter-spacing: 1px;
+}
+
+.sw-roles {
+  margin-top: 4px;
+}
+
+.sw-roles button {
+  flex: 0 1 auto;
+  padding: 4px 6px;
+  font-size: 7.5px;
+}
+
+.sw-roles button.on {
+  border-color: #ff8a7a;
+  color: #ffffff;
+}
+
+.sw-alert-row {
+  margin-top: 6px;
+  padding-top: 7px;
+  border-top: 1px solid rgba(53, 64, 79, 0.55);
+}
+
+.sw-alert-row .layer-name {
+  font-size: 9px;
+  letter-spacing: 0.7px;
+}
+
+.sw-alert-row .layer-note {
+  max-width: 88px;
+}
+
+.sw-alert-row[aria-pressed="true"] .layer-note {
+  color: #35e0c8;
+}
+
+.layer-seg button:disabled {
+  cursor: default;
+  opacity: 0.42;
+}
+
+.sw-history {
+  margin-top: 7px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(53, 64, 79, 0.55);
+}
+
+.sw-history-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #7a7a92;
+  font-family: monospace;
+  font-size: 8px;
+  letter-spacing: 0.8px;
+}
+
+.sw-history-head > span:first-child {
+  flex: 1;
+}
+
+.sw-history-count {
+  color: #9a9ab0;
+}
+
+#serviceWatchHistoryClear {
+  pointer-events: auto;
+  background: none;
+  border: 0;
+  color: #35e0c8;
+  font-family: monospace;
+  font-size: 8px;
+  letter-spacing: 0.5px;
+  padding: 0 2px;
+}
+
+.sw-history-list {
+  max-height: 86px;
+  margin-top: 4px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.sw-history-list[hidden],
+#serviceWatchHistoryClear[hidden] {
+  display: none;
+}
+
+.sw-history-row {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 4px 0;
+  border-bottom: 1px solid rgba(53, 64, 79, 0.4);
+  color: #e8e8f0;
+  font-family: monospace;
+  font-size: 8px;
+}
+
+.sw-history-row:last-child {
+  border-bottom: 0;
+}
+
+.sw-history-time {
+  flex: none;
+  width: 38px;
+  color: #7a7a92;
+}
+
+.sw-history-role {
+  flex: none;
+  min-width: 44px;
+  color: #ff8a7a;
+  font-size: 7px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+}
+
+.sw-history-role[data-role="POLICE"] {
+  color: #7db8ff;
+}
+
+.sw-history-role[data-role="FIRE"] {
+  color: #ffb15c;
+}
+
+.sw-history-role[data-role="RESCUE"] {
+  color: #ffd166;
+}
+
+.sw-history-call {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sw-history-dist {
+  flex: none;
+  color: #9a9ab0;
 }
 
 .sw-list {

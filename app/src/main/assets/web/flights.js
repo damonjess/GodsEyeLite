@@ -94,6 +94,10 @@
       location: null,
       geoStatus: 'idle',
       geoRequest: 0,
+      alertsState: 'off',
+      alertsMessage: '',
+      alertRoles: ['MEDEVAC', 'POLICE', 'FIRE', 'RESCUE', 'OTHER'],
+      history: [],
     },
     billboards: null,
     contrails: null,
@@ -1123,6 +1127,7 @@
   // ── Service Watch ──────────────────────────────────────────────────────────
 
   const WATCH_RADII = [10, 25, 50];
+  const ALERT_ROLES = ['MEDEVAC', 'POLICE', 'FIRE', 'RESCUE', 'OTHER'];
   const WATCH_COMPASS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
 
   function watchEl(tag, className, text) {
@@ -1176,6 +1181,7 @@
 
   function requestWatchLocation() {
     const requestId = ++state.watch.geoRequest;
+    state.watch.alertsMessage = '';
     if (!navigator.geolocation) {
       watchLocationFailed(requestId);
       return;
@@ -1203,6 +1209,8 @@
 
   function setWatchOrigin(origin) {
     if (origin !== 'map' && origin !== 'me') return;
+    if (state.watch.alertsState !== 'off') return;
+    state.watch.alertsMessage = '';
     if (origin === 'map') {
       state.watch.geoRequest += 1;
       state.watch.origin = 'map';
@@ -1216,6 +1224,165 @@
     requestWatchLocation();
   }
 
+  function setWatchAlertRole(role) {
+    if (state.watch.alertsState !== 'off') return;
+    if (!ALERT_ROLES.includes(role)) return;
+    const selected = new Set(state.watch.alertRoles);
+    if (selected.has(role)) selected.delete(role);
+    else selected.add(role);
+    state.watch.alertRoles = ALERT_ROLES.filter((item) => selected.has(item));
+    state.watch.alertsMessage = '';
+    refreshServiceWatch();
+  }
+
+  function watchHistoryTime(atMs) {
+    const date = new Date(atMs);
+    if (!Number.isFinite(date.getTime())) return '';
+    const now = new Date();
+    const time = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    if (date.toDateString() === now.toDateString()) return time;
+    return date.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + time;
+  }
+
+  function renderWatchAlertHistory() {
+    const list = document.getElementById('serviceWatchHistoryList');
+    const count = document.getElementById('serviceWatchHistoryCount');
+    const clear = document.getElementById('serviceWatchHistoryClear');
+    if (!list || !count || !clear) return;
+
+    const entries = state.watch.history;
+    count.textContent = String(entries.length);
+    clear.hidden = entries.length === 0;
+    list.hidden = entries.length === 0;
+    list.replaceChildren();
+
+    for (const entry of entries) {
+      const row = watchEl('div', 'sw-history-row');
+      row.appendChild(watchEl('span', 'sw-history-time', watchHistoryTime(entry.atMs)));
+      const role = watchEl('span', 'sw-history-role', entry.role);
+      role.dataset.role = entry.role;
+      row.appendChild(role);
+      row.appendChild(watchEl('span', 'sw-history-call', entry.identity));
+      row.appendChild(watchEl('span', 'sw-history-dist', watchDistance(entry.distanceM)));
+      row.title = `${entry.role} \u00b7 ${entry.identity} \u00b7 ${watchDistance(entry.distanceM)}`;
+      list.appendChild(row);
+    }
+  }
+
+  /** Called by Kotlin after the service posts an alert, or when the app resumes. */
+  function setServiceWatchAlertHistory(history) {
+    if (!Array.isArray(history)) return;
+    state.watch.history = history
+      .map((item) => {
+        if (!item || typeof item !== 'object') return null;
+        const hex = String(item.hex || '').trim();
+        const atMs = Number(item.atMs);
+        const distanceM = Number(item.distanceM);
+        if (!hex || !Number.isFinite(atMs) || !Number.isFinite(distanceM)) return null;
+        return {
+          atMs,
+          hex,
+          identity: String(item.identity || hex.toUpperCase()),
+          role: ALERT_ROLES.includes(item.role) ? item.role : 'OTHER',
+          distanceM,
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => b.atMs - a.atMs)
+      .slice(0, 30);
+    refreshServiceWatch();
+  }
+
+  function clearServiceWatchAlertHistory() {
+    state.watch.history = [];
+    refreshServiceWatch();
+    const api = bridge();
+    if (api && typeof api.clearServiceWatchAlertHistory === 'function') {
+      try {
+        api.clearServiceWatchAlertHistory();
+      } catch (error) {
+        log('alert history clear failed: ' + (error && error.message));
+      }
+    }
+  }
+
+  /** Called by Kotlin when the service starts, stops, or the page is restored. */
+  function setServiceWatchAlertsState(on, message, config) {
+    const active = !!on;
+    state.watch.alertsState = active ? 'on' : 'off';
+    state.watch.alertsMessage = active ? '' : String(message || '');
+    if (active && config) {
+      const lat = Number(config.lat);
+      const lon = Number(config.lon);
+      const radiusKm = Number(config.radiusKm);
+      if (Number.isFinite(lat) && Number.isFinite(lon)) {
+        state.watch.origin = 'me';
+        state.watch.geoStatus = 'ready';
+        state.watch.location = { lat, lon };
+        state.watch.geoRequest += 1; // A late fix must not replace the locked area.
+      }
+      if (WATCH_RADII.includes(radiusKm)) state.watch.radiusKm = radiusKm;
+      const roles = Array.isArray(config.roles)
+        ? ALERT_ROLES.filter((role) => config.roles.includes(role))
+        : [];
+      if (roles.length) state.watch.alertRoles = roles;
+    }
+    refreshServiceWatch();
+  }
+
+  function setWatchAlerts(on) {
+    if (!on) {
+      if (state.watch.alertsState === 'off') return;
+      state.watch.alertsState = 'off';
+      state.watch.alertsMessage = '';
+      refreshServiceWatch();
+      const api = bridge();
+      if (api && typeof api.stopServiceWatchAlerts === 'function') {
+        try {
+          api.stopServiceWatchAlerts();
+        } catch (error) {
+          log('service watch stop failed: ' + (error && error.message));
+        }
+      }
+      return;
+    }
+
+    if (state.watch.alertsState !== 'off') return;
+    if (!state.watch.alertRoles.length) {
+      state.watch.alertsMessage = 'PICK ROLE';
+      refreshServiceWatch();
+      return;
+    }
+    if (state.watch.origin !== 'me' || !state.watch.location) {
+      state.watch.alertsMessage = 'USE ME';
+      refreshServiceWatch();
+      return;
+    }
+    const api = bridge();
+    if (!api || typeof api.startServiceWatchAlerts !== 'function') {
+      state.watch.alertsMessage = 'UNAVAILABLE';
+      refreshServiceWatch();
+      return;
+    }
+
+    const centre = state.watch.location;
+    state.watch.alertsMessage = '';
+    state.watch.alertsState = 'starting';
+    refreshServiceWatch();
+    try {
+      api.startServiceWatchAlerts(
+        centre.lat,
+        centre.lon,
+        state.watch.radiusKm,
+        state.watch.alertRoles.join(','),
+      );
+    } catch (error) {
+      state.watch.alertsState = 'off';
+      state.watch.alertsMessage = 'ERROR';
+      refreshServiceWatch();
+    }
+  }
+
   function refreshServiceWatch() {
     const panel = document.getElementById('serviceWatchPanel');
     const list = document.getElementById('serviceWatchList');
@@ -1223,23 +1390,72 @@
     const count = document.getElementById('serviceWatchCount');
     const summary = document.getElementById('serviceWatchSummary');
     const foot = document.getElementById('serviceWatchFoot');
-    if (!panel || !list || !button || !count || !summary || !foot) return;
+    const alertsButton = document.getElementById('serviceWatchAlerts');
+    const alertsStatus = document.getElementById('serviceWatchAlertsStatus');
+    const rolesGroup = document.getElementById('serviceWatchRoles');
+    if (
+      !panel ||
+      !list ||
+      !button ||
+      !count ||
+      !summary ||
+      !foot ||
+      !alertsButton ||
+      !alertsStatus ||
+      !rolesGroup
+    ) {
+      return;
+    }
 
+    const alertsOn = state.watch.alertsState === 'on';
+    const alertsStarting = state.watch.alertsState === 'starting';
+    const controlsLocked = alertsOn || alertsStarting;
     const radius = state.watch.radiusKm;
     for (const radiusButton of panel.querySelectorAll('#serviceWatchRadius button')) {
       const active = Number(radiusButton.dataset.km) === radius;
       radiusButton.classList.toggle('on', active);
       radiusButton.setAttribute('aria-pressed', String(active));
+      radiusButton.disabled = controlsLocked;
     }
     for (const originButton of panel.querySelectorAll('#serviceWatchOrigin button')) {
       const active = originButton.dataset.origin === state.watch.origin;
       originButton.classList.toggle('on', active);
       originButton.setAttribute('aria-pressed', String(active));
+      originButton.disabled = controlsLocked;
     }
+    for (const roleButton of rolesGroup.querySelectorAll('button')) {
+      const active = state.watch.alertRoles.includes(roleButton.dataset.role);
+      roleButton.classList.toggle('on', active);
+      roleButton.setAttribute('aria-pressed', String(active));
+      roleButton.disabled = controlsLocked;
+    }
+    alertsButton.setAttribute('aria-pressed', String(alertsOn));
+    alertsButton.setAttribute('aria-busy', String(alertsStarting));
+    alertsButton.title = alertsOn
+      ? 'Tap to turn off background alerts'
+      : alertsStarting
+        ? 'Tap to cancel background alerts'
+        : state.watch.alertRoles.length
+          ? 'Start optional background alerts for this location and radius'
+          : 'Select at least one alert role';
+    alertsStatus.textContent = alertsStarting
+      ? 'STARTING'
+      : alertsOn
+        ? 'ON'
+        : state.watch.alertsMessage ||
+          (!state.watch.alertRoles.length ? 'PICK ROLE' : 'OFF');
+
+    renderWatchAlertHistory();
 
     const locating = state.watch.origin === 'me' && state.watch.geoStatus === 'loading';
     const locationFix = state.watch.origin === 'me' ? state.watch.location : null;
-    if (locating) {
+    if (alertsStarting) {
+      foot.textContent = 'Starting background alerts\u2026';
+    } else if (alertsOn) {
+      foot.textContent = 'Background alerts on \u00b7 watch area locked';
+    } else if (!state.watch.alertRoles.length) {
+      foot.textContent = 'Choose at least one alert role';
+    } else if (locating) {
       foot.textContent = 'Finding your location\u2026';
     } else if (state.watch.geoStatus === 'error') {
       foot.textContent = 'Location unavailable \u00b7 using map centre';
@@ -1372,15 +1588,36 @@
 
     for (const radiusButton of panel.querySelectorAll('#serviceWatchRadius button')) {
       radiusButton.addEventListener('click', () => {
+        if (state.watch.alertsState !== 'off') return;
         const km = Number(radiusButton.dataset.km);
         if (!WATCH_RADII.includes(km)) return;
         state.watch.radiusKm = km;
+        state.watch.alertsMessage = '';
         refreshServiceWatch();
       });
     }
 
     for (const originButton of panel.querySelectorAll('#serviceWatchOrigin button')) {
       originButton.addEventListener('click', () => setWatchOrigin(originButton.dataset.origin));
+    }
+
+    const rolesGroup = document.getElementById('serviceWatchRoles');
+    if (rolesGroup) {
+      for (const roleButton of rolesGroup.querySelectorAll('button')) {
+        roleButton.addEventListener('click', () => setWatchAlertRole(roleButton.dataset.role));
+      }
+    }
+
+    const historyClear = document.getElementById('serviceWatchHistoryClear');
+    if (historyClear) {
+      historyClear.addEventListener('click', clearServiceWatchAlertHistory);
+    }
+
+    const alertsButton = document.getElementById('serviceWatchAlerts');
+    if (alertsButton) {
+      alertsButton.addEventListener('click', () => {
+        setWatchAlerts(state.watch.alertsState === 'off');
+      });
     }
 
     refreshServiceWatch();
@@ -2322,12 +2559,24 @@
   window.GEVLite.setFlightDetails = setFlightDetails;
   window.GEVLite.setFlightsEnabled = setEnabled;
   window.GEVLite.flightsEnabled = () => state.enabled;
+  window.GEVLite.setServiceWatchAlertsState = setServiceWatchAlertsState;
+  window.GEVLite.setServiceWatchAlertHistory = setServiceWatchAlertHistory;
   window.GEVLite.serviceWatchStats = () => ({
     open: !!document.getElementById('serviceWatchPanel') && !document.getElementById('serviceWatchPanel').hidden,
     radiusKm: state.watch.radiusKm,
     origin: state.watch.origin,
     geoStatus: state.watch.geoStatus,
     hasLocation: !!state.watch.location,
+    alertsState: state.watch.alertsState,
+    alertsMessage: state.watch.alertsMessage,
+    alertsStatus: document.getElementById('serviceWatchAlertsStatus')?.textContent || '',
+    alertRoles: state.watch.alertRoles.slice(),
+    alertsLocked:
+      !!document.querySelector('#serviceWatchRadius button')?.disabled &&
+      !!document.querySelector('#serviceWatchOrigin button')?.disabled,
+    rolesLocked: !!document.querySelector('#serviceWatchRoles button')?.disabled,
+    historyCount: state.watch.history.length,
+    historyRows: document.querySelectorAll('#serviceWatchHistoryList .sw-history-row').length,
     rows: document.querySelectorAll('#serviceWatchList .sw-row').length,
     emergencyLoaded: [...state.byHex.values()].filter((rec) => rec.emergency).length,
   });

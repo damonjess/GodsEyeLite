@@ -1,9 +1,16 @@
 package com.gev.lite
 
+import android.Manifest
 import android.annotation.SuppressLint
-import android.content.pm.ApplicationInfo
 import android.app.Activity
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.content.pm.ApplicationInfo
+import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -77,6 +84,8 @@ class MainActivity : Activity() {
          */
         const val APP_ORIGIN = "https://appassets.androidplatform.net"
         const val START_URL = "$APP_ORIGIN/assets/web/index.html"
+
+        const val REQUEST_NOTIFICATIONS = 102
     }
 
     private lateinit var webView: WebView
@@ -108,6 +117,14 @@ class MainActivity : Activity() {
     private val cameras = LinkedHashMap<String, CctvCamera>()
     private var selected: CctvCamera? = null
     private var globeReady = false
+    private var pendingWatchAlertConfig: ServiceWatchConfig? = null
+    private var watchAlertReceiverRegistered = false
+
+    private val watchAlertStateReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            pushServiceWatchAlertsState()
+        }
+    }
     private var clipPlayer: ExoPlayer? = null
     private var stillRefresh: Runnable? = null
 
@@ -617,7 +634,32 @@ class MainActivity : Activity() {
                 pushToken()
                 pushPacks()
                 pushCameras()
+                pushServiceWatchAlertsState()
+                pushServiceWatchAlertHistory()
                 loadSatellites()
+            }
+        }
+
+        @JavascriptInterface
+        fun startServiceWatchAlerts(
+            lat: Double,
+            lon: Double,
+            radiusKm: Double,
+            roles: String,
+        ) {
+            main.post { this@MainActivity.startServiceWatchAlerts(lat, lon, radiusKm, roles) }
+        }
+
+        @JavascriptInterface
+        fun stopServiceWatchAlerts() {
+            main.post { this@MainActivity.stopServiceWatchAlerts() }
+        }
+
+        @JavascriptInterface
+        fun clearServiceWatchAlertHistory() {
+            main.post {
+                ServiceWatchAlertStore.clear(this@MainActivity)
+                pushServiceWatchAlertHistory()
             }
         }
 
@@ -690,17 +732,149 @@ class MainActivity : Activity() {
         permissions: Array<out String>,
         grantResults: IntArray
     ) {
-        if (requestCode == 101) {
-            val granted = grantResults.isNotEmpty() && grantResults[0] == android.content.pm.PackageManager.PERMISSION_GRANTED
-            geoCallback?.invoke(geoOrigin, granted, false)
-            geoCallback = null
-            geoOrigin = null
-        } else {
-            super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        when (requestCode) {
+            101 -> {
+                val granted = grantResults.isNotEmpty() &&
+                    grantResults[0] == PackageManager.PERMISSION_GRANTED
+                geoCallback?.invoke(geoOrigin, granted, false)
+                geoCallback = null
+                geoOrigin = null
+            }
+            REQUEST_NOTIFICATIONS -> {
+                val config = pendingWatchAlertConfig
+                pendingWatchAlertConfig = null
+                val granted = grantResults.isNotEmpty() &&
+                    grantResults[0] == PackageManager.PERMISSION_GRANTED
+                if (config != null) {
+                    if (granted) {
+                        launchServiceWatchAlerts(config)
+                    } else {
+                        pushServiceWatchAlertsState(false, "DENIED", null)
+                    }
+                }
+            }
+            else -> super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         }
     }
 
+    private fun registerWatchAlertReceiver() {
+        if (watchAlertReceiverRegistered) return
+        val filter = IntentFilter(ServiceWatchService.ACTION_STATE_CHANGED)
+        if (Build.VERSION.SDK_INT >= 33) {
+            registerReceiver(watchAlertStateReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(watchAlertStateReceiver, filter)
+        }
+        watchAlertReceiverRegistered = true
+    }
+
+    private fun unregisterWatchAlertReceiver() {
+        if (!watchAlertReceiverRegistered) return
+        runCatching { unregisterReceiver(watchAlertStateReceiver) }
+        watchAlertReceiverRegistered = false
+    }
+
+    private fun startServiceWatchAlerts(
+        lat: Double,
+        lon: Double,
+        radiusKm: Double,
+        rolesText: String,
+    ) {
+        val roles = ServiceWatchRole.parseCsv(rolesText)
+        if (!lat.isFinite() || !lon.isFinite() || !radiusKm.isFinite() || radiusKm <= 0) {
+            pushServiceWatchAlertsState(false, "ERROR", null)
+            return
+        }
+        if (roles.isEmpty()) {
+            pushServiceWatchAlertsState(false, "PICK ROLE", null)
+            return
+        }
+        val config = ServiceWatchConfig(
+            lat = lat,
+            lon = lon,
+            radiusKm = radiusKm,
+            roles = roles,
+        )
+        if (
+            Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            pendingWatchAlertConfig = config
+            requestPermissions(
+                arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+                REQUEST_NOTIFICATIONS,
+            )
+            return
+        }
+        launchServiceWatchAlerts(config)
+    }
+
+    private fun launchServiceWatchAlerts(config: ServiceWatchConfig) {
+        val intent = Intent(this, ServiceWatchService::class.java).apply {
+            action = ServiceWatchService.ACTION_START
+            putExtra(ServiceWatchService.EXTRA_LAT, config.lat)
+            putExtra(ServiceWatchService.EXTRA_LON, config.lon)
+            putExtra(ServiceWatchService.EXTRA_RADIUS_KM, config.radiusKm)
+            putExtra(
+                ServiceWatchService.EXTRA_ROLES,
+                config.roles.joinToString(",") { it.wire },
+            )
+        }
+        try {
+            startForegroundService(intent)
+            pushServiceWatchAlertsState(true, "", config)
+        } catch (error: Exception) {
+            Log.w(TAG, "could not start Service Watch alerts: ${error.message}")
+            pushServiceWatchAlertsState(false, "ERROR", null)
+        }
+    }
+
+    private fun stopServiceWatchAlerts() {
+        pendingWatchAlertConfig = null
+        runCatching { stopService(Intent(this, ServiceWatchService::class.java)) }
+        pushServiceWatchAlertsState(false, "", null)
+    }
+
+    /** Restores the alert UI from the service after the WebView reloads or the app resumes. */
+    private fun pushServiceWatchAlertsState(
+        on: Boolean = ServiceWatchService.isRunning,
+        message: String = "",
+        config: ServiceWatchConfig? = ServiceWatchService.activeConfig,
+    ) {
+        // onCreate marks the service running just before onStartCommand stores its
+        // config. The start broadcast will follow; do not flip the UI off in between.
+        if (on && config == null && ServiceWatchService.isRunning) return
+        val activeConfig = config.takeIf { on }
+        val configJson = if (activeConfig == null) {
+            "null"
+        } else {
+            JSONObject()
+                .put("lat", activeConfig.lat)
+                .put("lon", activeConfig.lon)
+                .put("radiusKm", activeConfig.radiusKm)
+                .put("roles", JSONArray(activeConfig.roles.map { it.wire }))
+                .toString()
+        }
+        val enabled = activeConfig != null
+        evaluate(
+            "window.GEVLite && typeof GEVLite.setServiceWatchAlertsState === 'function' " +
+                "&& GEVLite.setServiceWatchAlertsState($enabled, " +
+                "${JSONObject.quote(message)}, $configJson)"
+        )
+    }
+
+    private fun pushServiceWatchAlertHistory() {
+        val history = ServiceWatchAlertStore.load(this)
+        evaluate(
+            "window.GEVLite && typeof GEVLite.setServiceWatchAlertHistory === 'function' " +
+                "&& GEVLite.setServiceWatchAlertHistory(${ServiceWatchAlertStore.encode(history)})"
+        )
+    }
+
     override fun onPause() {
+        ServiceWatchService.appVisible = false
+        unregisterWatchAlertReceiver()
         super.onPause()
         webView.onPause()
         clearStillRefresh()
@@ -710,13 +884,20 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        ServiceWatchService.appVisible = true
+        registerWatchAlertReceiver()
         webView.onResume()
+        pushServiceWatchAlertsState()
+        pushServiceWatchAlertHistory()
         if (cameraPanel.visibility == View.VISIBLE) {
             selected?.let { camera -> showMedia(camera) }
         }
     }
 
     override fun onDestroy() {
+        ServiceWatchService.appVisible = false
+        unregisterWatchAlertReceiver()
+        pendingWatchAlertConfig = null
         clearStillRefresh()
         stopClip()
         io.shutdownNow()

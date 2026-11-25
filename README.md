@@ -112,7 +112,26 @@ as **LOCATE ME**, then falls back to the map centre if location is denied or
 unavailable. Each row shows its role, callsign/registration, type, distance and
 bearing, altitude, and last-seen age. Tap a row to reveal the aircraft (clearing
 a conflicting filter or search), open its card, and use **CHASE**. It reads the
-same flight poll as the map and does not run background notifications.
+same flight poll as the map.
+
+**BACKGROUND ALERTS** is an explicit opt-in. It needs a **ME** fix, requests
+Android notification permission, and then locks that location, radius, and role
+filters while active. The **ALERT ROLES** chips select **MEDEVAC**, **POLICE**,
+**FIRE**, **RESCUE**, and **OTHER** (other emergency squawks); all start enabled.
+At least one role is required. An ongoing foreground-service notification keeps
+the watch alive; while the app is visible the existing Service Watch poll is
+used, and only when the app is backgrounded does the service poll on its own
+(about every 30 seconds). New emergency/service aircraft matching the selected
+roles inside the radius produce one notification; aircraft already there when
+watching starts are not announced. Stop alerts from the panel or the
+notification's **STOP** action. No continuous location tracking is used: the
+service only reuses the one fix taken when alerts were enabled.
+
+Each posted alert is appended to **RECENT ALERTS** in the panel, with its role,
+callsign/registration, distance, and time. The local history keeps the latest 30
+entries across app restarts and Service Watch sessions, and **CLEAR** removes it.
+The live Service Watch list above still shows every emergency/service aircraft in
+the radius regardless of the alert-role filters.
 
 ## Satellites
 
@@ -171,6 +190,21 @@ Verified while building this:
   exercised. A live UK police helicopter (`G-TVHB`/`UKP042`) was promoted from
   its ADSBdb owner to a `POLICE` badge. The California live stream itself was not
   played on the device; its feed, parser, and HLS playlist were checked.
+- Background Service Watch was exercised on the Xiaomi: a ME fix enabled the
+  foreground service and ongoing STOP notification, polls continued while the
+  app was backgrounded (about 30 seconds apart), and reopening or reloading the
+  WebView restored `ON` with the location/radius locked. Selecting only
+  `POLICE` round-tripped into the running service and stayed locked after the
+  reload; clearing every role showed `PICK ROLE` and did not start the service.
+  The RECENT ALERTS list and CLEAR action rendered and cleared injected records
+  through the same JavaScript callback Kotlin uses. Stopping from the panel
+  removed both the service and its notification. Radius, role filtering, seeding,
+  new-aircraft detection, and history serialization/merging are covered by
+  `ServiceWatchMonitorTest` and `ServiceWatchAlertStoreTest`. No live new service
+  aircraft appeared during the device check, so the real alert notification and
+  the service's end-to-end history write were not triggered on-device;
+  notification permission was granted with adb rather than through the system
+  prompt.
 - The ion token and Cesium 3D buildings were not re-tested on this pass.
 
 ## Limitations
@@ -183,6 +217,12 @@ Verified while building this:
   missing callsign, or an ambiguous operator can leave a real service aircraft
   unidentified, and owner-only contractor matches can occasionally over-tag a
   non-HEMS flight.
+- **Background alerts are best-effort.** They need notification permission and
+  the Android foreground service to remain running; aggressive battery settings
+  can stop them. The watched area and role filters are fixed when enabled, and an
+  alert only fires when a later poll sees an aircraft that was absent from an
+  earlier successful poll. **RECENT ALERTS** records posted background alerts,
+  not ordinary foreground sightings, and keeps only the latest 30.
 - **Not affiliated with God's Eye View.** Separate app, separate code.
 - Building height coverage follows OpenStreetMap, and photorealistic tiles do not
   cover every city, which is why the OSM Buildings fallback exists.
