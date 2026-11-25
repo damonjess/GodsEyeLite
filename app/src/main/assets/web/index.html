@@ -40,6 +40,9 @@
           <button id="reset">RESET VIEW</button>
           <button id="locate">LOCATE ME</button>
           <button id="layersBtn" aria-expanded="false" aria-controls="layersPanel">LAYERS</button>
+          <button id="serviceWatchBtn" aria-expanded="false" aria-controls="serviceWatchPanel">
+            SERVICE <span id="serviceWatchCount">0</span>
+          </button>
         </div>
 
         <div id="layersPanel" hidden>
@@ -117,6 +120,28 @@
               <button data-event="volcano">VOLCANO</button>
             </div>
           </div>
+        </div>
+
+        <div id="serviceWatchPanel" hidden>
+          <div class="layers-head">
+            <span>SERVICE WATCH</span>
+            <button id="serviceWatchClose" aria-label="Close service watch">&times;</button>
+          </div>
+          <div id="serviceWatchSummary" class="sw-summary" role="status" aria-live="polite">
+            NO SERVICE AIRCRAFT
+          </div>
+          <div
+            id="serviceWatchRadius"
+            class="layer-seg sw-radius"
+            role="group"
+            aria-label="Service watch radius"
+          >
+            <button data-km="10" aria-pressed="false">10 KM</button>
+            <button data-km="25" class="on" aria-pressed="true">25 KM</button>
+            <button data-km="50" aria-pressed="false">50 KM</button>
+          </div>
+          <div id="serviceWatchList" class="sw-list"></div>
+          <div class="sw-foot">Distances from map centre &middot; updates with flights</div>
         </div>
 
         <div id="hint">Tap a dot to open that camera</div>

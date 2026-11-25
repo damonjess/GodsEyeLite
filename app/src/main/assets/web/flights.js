@@ -88,6 +88,7 @@
     enabled: true,
     filter: 'all', // 'all' | 'military' | 'emergency' | 'heli' | 'low'
     search: '',
+    watch: { radiusKm: 25 },
     billboards: null,
     contrails: null,
     contrailEntries: new Map(),
@@ -1020,6 +1021,7 @@
     if (state.statusNote === note) return;
     state.statusNote = note;
     renderToggle();
+    refreshServiceWatch();
   }
 
   // ── Aircraft filters and search ────────────────────────────────────────────
@@ -1110,6 +1112,192 @@
       clearTimeout(timer);
       timer = setTimeout(() => setSearch(search.value), 120);
     });
+  }
+
+  // ── Service Watch ──────────────────────────────────────────────────────────
+
+  const WATCH_RADII = [10, 25, 50];
+  const WATCH_COMPASS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+
+  function watchEl(tag, className, text) {
+    const element = document.createElement(tag);
+    if (className) element.className = className;
+    if (text != null) element.textContent = text;
+    return element;
+  }
+
+  function watchDistance(metres) {
+    if (metres < 1000) return Math.round(metres) + ' m';
+    if (metres < 10_000) return (metres / 1000).toFixed(1) + ' km';
+    return Math.round(metres / 1000) + ' km';
+  }
+
+  function watchBearing(lat1, lon1, lat2, lon2) {
+    const rad = Math.PI / 180;
+    const dLon = (lon2 - lon1) * rad;
+    const y = Math.sin(dLon) * Math.cos(lat2 * rad);
+    const x =
+      Math.cos(lat1 * rad) * Math.sin(lat2 * rad) -
+      Math.sin(lat1 * rad) * Math.cos(lat2 * rad) * Math.cos(dLon);
+    const degrees = (Math.atan2(y, x) / rad + 360) % 360;
+    return WATCH_COMPASS[Math.round(degrees / 45) % 8];
+  }
+
+  function setWatchOpen(open) {
+    const panel = document.getElementById('serviceWatchPanel');
+    if (!panel) return;
+    panel.hidden = !open;
+    const button = document.getElementById('serviceWatchBtn');
+    if (button) button.setAttribute('aria-expanded', String(open));
+
+    if (open) {
+      // Keep one panel's worth of vertical space available on a phone.
+      const layersPanel = document.getElementById('layersPanel');
+      const layersButton = document.getElementById('layersBtn');
+      if (layersPanel) layersPanel.hidden = true;
+      if (layersButton) layersButton.setAttribute('aria-expanded', 'false');
+      refreshServiceWatch();
+    }
+  }
+
+  function refreshServiceWatch() {
+    const panel = document.getElementById('serviceWatchPanel');
+    const list = document.getElementById('serviceWatchList');
+    const button = document.getElementById('serviceWatchBtn');
+    const count = document.getElementById('serviceWatchCount');
+    const summary = document.getElementById('serviceWatchSummary');
+    if (!panel || !list || !button || !count || !summary) return;
+
+    const radius = state.watch.radiusKm;
+    for (const radiusButton of panel.querySelectorAll('#serviceWatchRadius button')) {
+      const active = Number(radiusButton.dataset.km) === radius;
+      radiusButton.classList.toggle('on', active);
+      radiusButton.setAttribute('aria-pressed', String(active));
+    }
+
+    if (!state.enabled) {
+      count.textContent = '0';
+      button.classList.remove('has-service');
+      summary.classList.remove('has-service');
+      summary.textContent = 'PLANES OFF';
+      list.replaceChildren();
+      return;
+    }
+
+    if (!state.viewer) {
+      count.textContent = '0';
+      button.classList.remove('has-service');
+      summary.classList.remove('has-service');
+      summary.textContent = 'FLIGHTS LOADING';
+      list.replaceChildren();
+      return;
+    }
+
+    const centre = viewCenter();
+    const now = performance.now();
+    const rows = [];
+    for (const rec of state.byHex.values()) {
+      if (!rec.emergency) continue;
+      const pos = rec.now || { lat: rec.lat, lon: rec.lon, alt: rec.altM };
+      if (!Number.isFinite(pos.lat) || !Number.isFinite(pos.lon)) continue;
+      const distanceM = greatCircleM(centre.lat, centre.lon, pos.lat, pos.lon);
+      if (distanceM <= radius * 1000) rows.push({ rec, pos, distanceM });
+    }
+    rows.sort((a, b) => a.distanceM - b.distanceM);
+
+    count.textContent = String(rows.length);
+    button.classList.toggle('has-service', rows.length > 0);
+    summary.classList.toggle('has-service', rows.length > 0);
+    summary.textContent = state.statusNote
+      ? state.statusNote
+      : rows.length
+        ? `${rows.length} SERVICE AIRCRAFT \u00b7 ${radius} KM`
+        : `NO SERVICE AIRCRAFT WITHIN ${radius} KM`;
+
+    if (panel.hidden) return;
+    list.replaceChildren();
+    if (!rows.length) {
+      list.appendChild(
+        watchEl('div', 'sw-empty', 'No emergency or service flights are currently loaded in this radius.'),
+      );
+      return;
+    }
+
+    for (const { rec, pos, distanceM } of rows) {
+      const badge = emergencyBadge(rec);
+      const ageS = Number.isFinite(rec.t0) ? Math.max(0, Math.round((now - rec.t0) / 1000)) : 0;
+      const identity = rec.callsign || rec.reg || rec.hex.toUpperCase();
+      const bearing = watchBearing(centre.lat, centre.lon, pos.lat, pos.lon);
+      const distance = watchDistance(distanceM);
+      const meta = [
+        typeName(rec.type) || (rec.heli ? 'Helicopter' : 'Aircraft'),
+        rec.reg && rec.reg !== identity ? rec.reg : '',
+        distance + ' ' + bearing,
+        altText(pos.alt || 0),
+      ]
+        .filter(Boolean)
+        .join(' \u00b7 ');
+
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'sw-row';
+      row.dataset.hex = rec.hex;
+      row.title = badge.n + (rec.emergencyReason ? ' (' + rec.emergencyReason + ')' : '');
+      row.setAttribute('aria-label', `${identity}, ${badge.n}, ${distance}, ${bearing}`);
+      row.style.setProperty('--sw-color', badge.c);
+
+      const dot = watchEl('span', 'sw-dot');
+      dot.style.background = badge.c;
+
+      const body = watchEl('span', 'sw-body');
+      const title = watchEl('span', 'sw-title');
+      title.appendChild(watchEl('span', 'sw-call', identity));
+      const badgeEl = watchEl('span', 'sw-badge', badge.s);
+      badgeEl.style.background = badge.c;
+      badgeEl.style.color = textColorOn(badge.c);
+      title.appendChild(badgeEl);
+      body.appendChild(title);
+      body.appendChild(watchEl('span', 'sw-meta', meta));
+
+      row.appendChild(dot);
+      row.appendChild(body);
+      row.appendChild(watchEl('span', 'sw-age', ageS <= 15 ? 'LIVE' : ageS + 's'));
+      list.appendChild(row);
+    }
+  }
+
+  function wireServiceWatch() {
+    const panel = document.getElementById('serviceWatchPanel');
+    const button = document.getElementById('serviceWatchBtn');
+    if (!panel || !button) return;
+
+    button.addEventListener('click', () => setWatchOpen(panel.hidden));
+    const close = document.getElementById('serviceWatchClose');
+    if (close) close.addEventListener('click', () => setWatchOpen(false));
+
+    const list = document.getElementById('serviceWatchList');
+    if (list) {
+      list.addEventListener('click', (event) => {
+        const target = event.target;
+        if (!(target instanceof Element)) return;
+        const row = target.closest('.sw-row');
+        if (!row) return;
+        const hex = row.dataset.hex;
+        setWatchOpen(false);
+        select(hex, true);
+      });
+    }
+
+    for (const radiusButton of panel.querySelectorAll('#serviceWatchRadius button')) {
+      radiusButton.addEventListener('click', () => {
+        const km = Number(radiusButton.dataset.km);
+        if (!WATCH_RADII.includes(km)) return;
+        state.watch.radiusKm = km;
+        refreshServiceWatch();
+      });
+    }
+
+    refreshServiceWatch();
   }
 
   // ── Requesting data ────────────────────────────────────────────────────────
@@ -1233,6 +1421,7 @@
       updateCard();
     }
     renderToggle();
+    refreshServiceWatch();
   }
 
   function flightsFailed() {
@@ -1636,9 +1825,14 @@
 
   // ── Selection: card, drop line, trail ──────────────────────────────────────
 
-  function select(hex) {
+  function select(hex, reveal = false) {
     const rec = state.byHex.get(hex);
-    if (!rec || !rec.visible) return;
+    if (!rec) return;
+    if (!rec.visible && reveal) {
+      setFilter('all');
+      setSearch('');
+    }
+    if (!rec.visible) return;
     window.dispatchEvent(new CustomEvent('gev:dismissCards', { detail: 'flight' }));
     clearSelection();
     state.selectedHex = hex;
@@ -1927,6 +2121,7 @@
     }
     state.byHex.clear();
     renderToggle();
+    refreshServiceWatch();
   }
 
   function setEnabled(on) {
@@ -1938,6 +2133,7 @@
       request(true);
     }
     renderToggle();
+    refreshServiceWatch();
   }
 
   // ── Wiring ─────────────────────────────────────────────────────────────────
@@ -1962,6 +2158,7 @@
       haze: Cesium.Color.fromCssColorString('#cfe0f2').withAlpha(0.09),
     };
     injectUi();
+    wireServiceWatch();
 
     initModelPool();
 
@@ -1999,6 +2196,8 @@
     }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
 
     state.pollTimer = setInterval(() => request(false), CFG.pollMs);
+    // Distances and last-seen ages move even when no fresh poll has arrived.
+    state.watchTimer = setInterval(refreshServiceWatch, 2000);
     document.addEventListener('visibilitychange', () => {
       if (!document.hidden) request(true);
     });
@@ -2037,6 +2236,12 @@
   window.GEVLite.setFlightDetails = setFlightDetails;
   window.GEVLite.setFlightsEnabled = setEnabled;
   window.GEVLite.flightsEnabled = () => state.enabled;
+  window.GEVLite.serviceWatchStats = () => ({
+    open: !!document.getElementById('serviceWatchPanel') && !document.getElementById('serviceWatchPanel').hidden,
+    radiusKm: state.watch.radiusKm,
+    rows: document.querySelectorAll('#serviceWatchList .sw-row').length,
+    emergencyLoaded: [...state.byHex.values()].filter((rec) => rec.emergency).length,
+  });
   // Programmatic selection hook for tests and future deep links.
   window.GEVLite.selectNearestFlight = () => {
     if (!state.enabled || !state.viewer) return null;

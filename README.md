@@ -104,6 +104,14 @@ neither a service callsign nor a matching registered owner (or ADSBdb has no
 record). Contractor ownership is a heuristic: Babcock MCS Onshore also operates
 some non-HEMS aircraft, so an owner-only match can over-tag one of those flights.
 
+The **SERVICE** button opens Service Watch: a nearest-first list of emergency
+and service aircraft currently loaded within 10, 25, or 50 km of the map centre.
+Each row shows its role, callsign/registration, type, distance and bearing,
+altitude, and last-seen age. Tap a row to reveal the aircraft (clearing a
+conflicting filter or search), open its card, and use **CHASE**. It reads the
+same flight poll as the map, needs no location permission, and does not run
+background notifications.
+
 ## Satellites
 
 Satellites are fetched from CelesTrak's public GP element sets (space stations,

@@ -833,7 +833,8 @@
       clearTimeout(timer);
       timer = setTimeout(() => {
         const panel = document.getElementById('layersPanel');
-        if (panel && !panel.hidden) return;
+        const servicePanel = document.getElementById('serviceWatchPanel');
+        if ((panel && !panel.hidden) || (servicePanel && !servicePanel.hidden)) return;
         hud.classList.add('idle');
       }, IDLE_MS);
     };
@@ -902,6 +903,12 @@
     const setOpen = (open) => {
       panel.hidden = !open;
       button.setAttribute('aria-expanded', String(open));
+      if (open) {
+        const servicePanel = document.getElementById('serviceWatchPanel');
+        const serviceButton = document.getElementById('serviceWatchBtn');
+        if (servicePanel) servicePanel.hidden = true;
+        if (serviceButton) serviceButton.setAttribute('aria-expanded', 'false');
+      }
       wakeHud();
     };
 

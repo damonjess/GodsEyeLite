@@ -43,7 +43,8 @@ body {
 #hud.idle #packs,
 #hud.idle #reset,
 #hud.idle #locate,
-#hud.idle #layersBtn {
+#hud.idle #layersBtn,
+#hud.idle #serviceWatchBtn {
   opacity: 0;
   pointer-events: none;
 }
@@ -91,7 +92,8 @@ body {
 
 #reset,
 #locate,
-#layersBtn {
+#layersBtn,
+#serviceWatchBtn {
   pointer-events: auto;
   margin-top: 8px;
   background: rgba(10, 10, 15, 0.8);
@@ -103,9 +105,24 @@ body {
   font-size: 10px;
 }
 
-#layersBtn[aria-expanded="true"] {
+#layersBtn[aria-expanded="true"],
+#serviceWatchBtn[aria-expanded="true"] {
   border-color: #35e0c8;
   color: #e8e8f0;
+}
+
+#serviceWatchBtn.has-service {
+  border-color: #e53935;
+  color: #ffffff;
+}
+
+#serviceWatchCount {
+  color: #35e0c8;
+  font-weight: 700;
+}
+
+#serviceWatchBtn.has-service #serviceWatchCount {
+  color: #ff6a5a;
 }
 
 /* Compact layer/filter panel. It stays inside #hud so it shares the same
@@ -124,6 +141,152 @@ body {
 
 #layersPanel[hidden] {
   display: none;
+}
+
+#serviceWatchPanel {
+  box-sizing: border-box;
+  width: min(320px, calc(100vw - 24px));
+  max-height: min(52vh, 430px);
+  margin-top: 8px;
+  padding: 9px 10px 10px;
+  display: flex;
+  flex-direction: column;
+  background: rgba(8, 10, 15, 0.94);
+  border: 1px solid #35404f;
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+  pointer-events: auto;
+}
+
+#serviceWatchPanel[hidden] {
+  display: none;
+}
+
+#serviceWatchClose {
+  pointer-events: auto;
+  background: none;
+  border: 0;
+  color: #9a9ab0;
+  font-size: 20px;
+  line-height: 1;
+  padding: 0 2px;
+}
+
+.sw-summary {
+  margin-top: 6px;
+  color: #c8c8d8;
+  font-family: monospace;
+  font-size: 9px;
+  letter-spacing: 0.3px;
+}
+
+.sw-summary.has-service {
+  color: #ff9a8f;
+}
+
+.sw-radius {
+  margin-top: 6px;
+}
+
+.sw-list {
+  min-height: 0;
+  margin-top: 5px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.sw-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 2px;
+  border: 0;
+  border-left: 2px solid var(--sw-color, #35404f);
+  border-bottom: 1px solid rgba(53, 64, 79, 0.55);
+  background: none;
+  color: #e8e8f0;
+  font-family: monospace;
+  text-align: left;
+  pointer-events: auto;
+}
+
+.sw-row:active {
+  background: rgba(53, 224, 200, 0.08);
+}
+
+.sw-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--sw-color, #e53935);
+}
+
+.sw-body {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sw-title {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.sw-call {
+  overflow: hidden;
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sw-badge {
+  flex: none;
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 7px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+
+.sw-meta {
+  overflow: hidden;
+  color: #9a9ab0;
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sw-age {
+  flex: none;
+  color: #7a7a92;
+  font-size: 8px;
+}
+
+.sw-empty {
+  padding: 10px 2px;
+  color: #8a8aa0;
+  font-family: monospace;
+  font-size: 9px;
+  line-height: 1.4;
+}
+
+.sw-foot {
+  margin-top: 7px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(53, 64, 79, 0.55);
+  color: #7a7a92;
+  font-family: monospace;
+  font-size: 8px;
 }
 
 .layers-head {
