@@ -105,12 +105,14 @@ record). Contractor ownership is a heuristic: Babcock MCS Onshore also operates
 some non-HEMS aircraft, so an owner-only match can over-tag one of those flights.
 
 The **SERVICE** button opens Service Watch: a nearest-first list of emergency
-and service aircraft currently loaded within 10, 25, or 50 km of the map centre.
-Each row shows its role, callsign/registration, type, distance and bearing,
-altitude, and last-seen age. Tap a row to reveal the aircraft (clearing a
-conflicting filter or search), open its card, and use **CHASE**. It reads the
-same flight poll as the map, needs no location permission, and does not run
-background notifications.
+and service aircraft currently loaded within 10, 25, or 50 km of either the map
+centre or your own location. A **MAP / ME** toggle switches the distance origin;
+**ME** takes one location fix using the same Android/WebView location permission
+as **LOCATE ME**, then falls back to the map centre if location is denied or
+unavailable. Each row shows its role, callsign/registration, type, distance and
+bearing, altitude, and last-seen age. Tap a row to reveal the aircraft (clearing
+a conflicting filter or search), open its card, and use **CHASE**. It reads the
+same flight poll as the map and does not run background notifications.
 
 ## Satellites
 

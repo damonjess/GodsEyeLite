@@ -88,7 +88,13 @@
     enabled: true,
     filter: 'all', // 'all' | 'military' | 'emergency' | 'heli' | 'low'
     search: '',
-    watch: { radiusKm: 25 },
+    watch: {
+      radiusKm: 25,
+      origin: 'map',
+      location: null,
+      geoStatus: 'idle',
+      geoRequest: 0,
+    },
     billboards: null,
     contrails: null,
     contrailEntries: new Map(),
@@ -1160,13 +1166,64 @@
     }
   }
 
+  function watchLocationFailed(requestId) {
+    if (requestId !== state.watch.geoRequest) return;
+    state.watch.location = null;
+    state.watch.origin = 'map';
+    state.watch.geoStatus = 'error';
+    refreshServiceWatch();
+  }
+
+  function requestWatchLocation() {
+    const requestId = ++state.watch.geoRequest;
+    if (!navigator.geolocation) {
+      watchLocationFailed(requestId);
+      return;
+    }
+    state.watch.geoStatus = 'loading';
+    refreshServiceWatch();
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        if (requestId !== state.watch.geoRequest) return;
+        const lat = Number(position.coords.latitude);
+        const lon = Number(position.coords.longitude);
+        if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+          watchLocationFailed(requestId);
+          return;
+        }
+        state.watch.location = { lat, lon };
+        state.watch.geoStatus = 'ready';
+        refreshServiceWatch();
+      },
+      () => watchLocationFailed(requestId),
+      { enableHighAccuracy: false, timeout: 10_000, maximumAge: 120_000 },
+    );
+  }
+
+  function setWatchOrigin(origin) {
+    if (origin !== 'map' && origin !== 'me') return;
+    if (origin === 'map') {
+      state.watch.geoRequest += 1;
+      state.watch.origin = 'map';
+      state.watch.location = null;
+      state.watch.geoStatus = 'idle';
+      refreshServiceWatch();
+      return;
+    }
+    if (state.watch.origin === 'me') return;
+    state.watch.origin = 'me';
+    requestWatchLocation();
+  }
+
   function refreshServiceWatch() {
     const panel = document.getElementById('serviceWatchPanel');
     const list = document.getElementById('serviceWatchList');
     const button = document.getElementById('serviceWatchBtn');
     const count = document.getElementById('serviceWatchCount');
     const summary = document.getElementById('serviceWatchSummary');
-    if (!panel || !list || !button || !count || !summary) return;
+    const foot = document.getElementById('serviceWatchFoot');
+    if (!panel || !list || !button || !count || !summary || !foot) return;
 
     const radius = state.watch.radiusKm;
     for (const radiusButton of panel.querySelectorAll('#serviceWatchRadius button')) {
@@ -1174,26 +1231,48 @@
       radiusButton.classList.toggle('on', active);
       radiusButton.setAttribute('aria-pressed', String(active));
     }
+    for (const originButton of panel.querySelectorAll('#serviceWatchOrigin button')) {
+      const active = originButton.dataset.origin === state.watch.origin;
+      originButton.classList.toggle('on', active);
+      originButton.setAttribute('aria-pressed', String(active));
+    }
 
-    if (!state.enabled) {
-      count.textContent = '0';
+    const locating = state.watch.origin === 'me' && state.watch.geoStatus === 'loading';
+    const locationFix = state.watch.origin === 'me' ? state.watch.location : null;
+    if (locating) {
+      foot.textContent = 'Finding your location\u2026';
+    } else if (state.watch.geoStatus === 'error') {
+      foot.textContent = 'Location unavailable \u00b7 using map centre';
+    } else if (locationFix) {
+      foot.textContent = 'Distances from your location \u00b7 updates with flights';
+    } else {
+      foot.textContent = 'Distances from map centre \u00b7 updates with flights';
+    }
+
+    const showWatchState = (countText, summaryText) => {
+      count.textContent = countText;
       button.classList.remove('has-service');
       summary.classList.remove('has-service');
-      summary.textContent = 'PLANES OFF';
+      summary.textContent = summaryText;
       list.replaceChildren();
+    };
+
+    if (!state.enabled) {
+      showWatchState('0', 'PLANES OFF');
       return;
     }
 
     if (!state.viewer) {
-      count.textContent = '0';
-      button.classList.remove('has-service');
-      summary.classList.remove('has-service');
-      summary.textContent = 'FLIGHTS LOADING';
-      list.replaceChildren();
+      showWatchState('0', 'FLIGHTS LOADING');
       return;
     }
 
-    const centre = viewCenter();
+    if (locating) {
+      showWatchState('...', 'LOCATING...');
+      return;
+    }
+
+    const centre = locationFix || viewCenter();
     const now = performance.now();
     const rows = [];
     for (const rec of state.byHex.values()) {
@@ -1227,12 +1306,12 @@
       const badge = emergencyBadge(rec);
       const ageS = Number.isFinite(rec.t0) ? Math.max(0, Math.round((now - rec.t0) / 1000)) : 0;
       const identity = rec.callsign || rec.reg || rec.hex.toUpperCase();
-      const bearing = watchBearing(centre.lat, centre.lon, pos.lat, pos.lon);
+      const bearing = distanceM < 100 ? '' : watchBearing(centre.lat, centre.lon, pos.lat, pos.lon);
       const distance = watchDistance(distanceM);
       const meta = [
         typeName(rec.type) || (rec.heli ? 'Helicopter' : 'Aircraft'),
         rec.reg && rec.reg !== identity ? rec.reg : '',
-        distance + ' ' + bearing,
+        distance + (bearing ? ' ' + bearing : ''),
         altText(pos.alt || 0),
       ]
         .filter(Boolean)
@@ -1243,7 +1322,10 @@
       row.className = 'sw-row';
       row.dataset.hex = rec.hex;
       row.title = badge.n + (rec.emergencyReason ? ' (' + rec.emergencyReason + ')' : '');
-      row.setAttribute('aria-label', `${identity}, ${badge.n}, ${distance}, ${bearing}`);
+      row.setAttribute(
+        'aria-label',
+        `${identity}, ${badge.n}, ${distance}${bearing ? ', ' + bearing : ''}`,
+      );
       row.style.setProperty('--sw-color', badge.c);
 
       const dot = watchEl('span', 'sw-dot');
@@ -1295,6 +1377,10 @@
         state.watch.radiusKm = km;
         refreshServiceWatch();
       });
+    }
+
+    for (const originButton of panel.querySelectorAll('#serviceWatchOrigin button')) {
+      originButton.addEventListener('click', () => setWatchOrigin(originButton.dataset.origin));
     }
 
     refreshServiceWatch();
@@ -2239,6 +2325,9 @@
   window.GEVLite.serviceWatchStats = () => ({
     open: !!document.getElementById('serviceWatchPanel') && !document.getElementById('serviceWatchPanel').hidden,
     radiusKm: state.watch.radiusKm,
+    origin: state.watch.origin,
+    geoStatus: state.watch.geoStatus,
+    hasLocation: !!state.watch.location,
     rows: document.querySelectorAll('#serviceWatchList .sw-row').length,
     emergencyLoaded: [...state.byHex.values()].filter((rec) => rec.emergency).length,
   });

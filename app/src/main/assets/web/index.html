@@ -130,6 +130,20 @@
           <div id="serviceWatchSummary" class="sw-summary" role="status" aria-live="polite">
             NO SERVICE AIRCRAFT
           </div>
+          <div class="sw-origin-row">
+            <span class="sw-origin-label">FROM</span>
+            <div
+              id="serviceWatchOrigin"
+              class="layer-seg sw-origin"
+              role="group"
+              aria-label="Distance origin"
+            >
+              <button data-origin="map" class="on" aria-pressed="true" title="Use map centre">
+                MAP
+              </button>
+              <button data-origin="me" aria-pressed="false" title="Use my location">ME</button>
+            </div>
+          </div>
           <div
             id="serviceWatchRadius"
             class="layer-seg sw-radius"
@@ -141,7 +155,9 @@
             <button data-km="50" aria-pressed="false">50 KM</button>
           </div>
           <div id="serviceWatchList" class="sw-list"></div>
-          <div class="sw-foot">Distances from map centre &middot; updates with flights</div>
+          <div id="serviceWatchFoot" class="sw-foot">
+            Distances from map centre &middot; updates with flights
+          </div>
         </div>
 
         <div id="hint">Tap a dot to open that camera</div>

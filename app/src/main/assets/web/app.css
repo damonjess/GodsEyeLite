@@ -184,6 +184,30 @@ body {
   color: #ff9a8f;
 }
 
+.sw-origin-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.sw-origin-label {
+  flex: none;
+  color: #7a7a92;
+  font-family: monospace;
+  font-size: 8px;
+  letter-spacing: 1px;
+}
+
+.sw-origin {
+  flex: 1;
+}
+
+.sw-origin button {
+  padding: 4px 2px;
+  font-size: 8px;
+}
+
 .sw-radius {
   margin-top: 6px;
 }
