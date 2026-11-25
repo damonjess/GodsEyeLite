@@ -87,8 +87,10 @@ internal class FlightRepository {
         // Callsigns used by air-ambulance, police, fire and rescue services.
         // Keep these specific: a registration-style callsign has no service
         // information and is enriched from its registration owner below.
+        // HLE## is the UK CAA/ICAO HEMS callsign (HELIMED). It is used by
+        // contractor-operated air ambulances as well as charity-owned ones.
         private val MEDICAL_CALLSIGN = Regex(
-            "^(LIFEGUARD|MEDEVAC|AIRMED|HELIMED|HEMS|AIRAMB|NHZ|MEDSTAR|AIRLIFE|LIFEFLIGHT|LIFESTAR|LIFETEAM|LIFEMED|MEDFLIGHT|AIRCARE|CAREFLIGHT|CALSTAR|PHI\\d|REACH\\d|DUSTOFF|PEDRO|JOLLY)",
+            "^(LIFEGUARD|MEDEVAC|AIRMED|HELIMED|HEMS|HLE\\d|AIRAMB|NHZ|MEDSTAR|AIRLIFE|LIFEFLIGHT|LIFESTAR|LIFETEAM|LIFEMED|MEDFLIGHT|AIRCARE|CAREFLIGHT|CALSTAR|PHI\\d|REACH\\d|DUSTOFF|PEDRO|JOLLY)",
         )
         private val POLICE_CALLSIGN = Regex(
             "^(POLICE|NPAS|SHERIFF|TROOPER|HIGHWAY|PUBLIC\\s*SAFETY|AIRSUPPORT)",
@@ -104,6 +106,14 @@ internal class FlightRepository {
                 "EMERGENCY\\s+MEDICINE|MEDICAL\\s+(CENTER|EMERGENCY|SERVICES|TRANSPORT)|" +
                 "LIFEGUARD|LIFEFLIGHT|LIFESTAR|LIFETEAM|LIFEMED|LIFELINE|AIRCARE|CAREFLIGHT|CALSTAR|" +
                 "PHI\\s+AIR|REACH\\s+AIR|HELIMED|HEMS|AIR\\s+MEDICAL)",
+            RegexOption.IGNORE_CASE,
+        )
+        // Babcock MCS Onshore flies air ambulances, police aircraft and some
+        // windfarm work. Known police/HEMS callsigns are classified before this
+        // owner fallback, so restrict it to the onshore division and do not
+        // treat "Babcock MCS Offshore" as a medical operator.
+        private val MEDICAL_CONTRACTOR_OWNER = Regex(
+            "BABCOCK\\s+(MCS|MISSION\\s+CRITICAL\\s+SERVICES)\\s+ONSHORE\\b",
             RegexOption.IGNORE_CASE,
         )
         private val POLICE_OWNER = Regex(
@@ -123,9 +133,15 @@ internal class FlightRepository {
 
         // Only used to decide which registration records are worth looking up.
         private val HELICOPTER_TYPES = setOf(
-            "A109", "A119", "A139", "A169", "A189", "AS32", "AS50", "AS55", "AS65",
-            "AW109", "AW139", "AW169", "AW189", "B06", "B407", "B429", "EC45",
-            "H135", "H145", "H160", "H500", "H64", "R22", "R44", "UH60", "V22",
+            "A109", "A119", "A139", "A169", "A189", "AS32", "AS33", "AS50", "AS55", "AS65",
+            "AW09", "AW101", "AW109", "AW119", "AW139", "AW169", "AW189", "EH10",
+            "EC20", "EC25", "EC30", "EC35", "EC45", "EC55", "EC75", "H90", "H125", "H130",
+            "H135", "H145", "H155", "H160", "H175", "H215", "H225", "NH90",
+            "B06", "B06T", "B105", "B117", "B206", "B212", "B407", "B412", "B429", "B430",
+            "B505", "B525", "MD52", "MD60", "H369", "H500", "H64",
+            "R22", "R44", "R66", "S61", "S64", "S70", "S76", "S92",
+            "UH1", "UH1H", "UH60", "H60", "CH46", "CH47", "CH53", "AH1", "AH6", "AH64",
+            "V22", "CV22", "MV22", "MI8", "MI17", "MI24", "MI26", "KA27", "KA32", "LYNX", "WILDCAT",
         )
     }
 
@@ -364,6 +380,7 @@ internal class FlightRepository {
         return when {
             POLICE_OWNER.containsMatchIn(text) -> "POLICE"
             MEDICAL_OWNER.containsMatchIn(text) -> "MEDICAL"
+            MEDICAL_CONTRACTOR_OWNER.containsMatchIn(text) -> "MEDICAL"
             FIRE_OWNER.containsMatchIn(text) -> "FIRE"
             RESCUE_OWNER.containsMatchIn(text) -> "RESCUE"
             else -> when (flagCode.trim().uppercase(Locale.US)) {

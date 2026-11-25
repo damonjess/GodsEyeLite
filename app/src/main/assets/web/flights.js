@@ -86,7 +86,7 @@
   const state = {
     viewer: null,
     enabled: true,
-    filter: 'all', // 'all' | 'watch' | 'heli' | 'low'
+    filter: 'all', // 'all' | 'military' | 'emergency' | 'heli' | 'low'
     search: '',
     billboards: null,
     contrails: null,
@@ -162,7 +162,40 @@
   };
   const MIL_CHIP = ['Military', 'MIL', '#b3202a'];
   const MILITARY_BADGE = { n: 'Military', s: 'MIL', c: '#6e7b68' };
-  const EMERGENCY_BADGE = { n: 'Emergency', s: 'EMERG', c: '#d92b2b' };
+
+  function emergencyColor(reason) {
+    const r = String(reason || '').trim().toUpperCase();
+    if (r === 'RESCUE') return '#e6a100'; // Yellow
+    if (r === 'POLICE') return '#1e88e5'; // Blue
+    if (r === 'FIRE') return '#ff7300';   // Orange
+    if (r === 'MEDICAL') return '#e53935'; // Red
+    return '#d92b2b';                      // General Emergency Red
+  }
+
+  function emergencyBadge(rec) {
+    const reason = String(rec.emergencyReason || '').trim().toUpperCase();
+    const c = emergencyColor(reason);
+    let s = 'EMERG';
+    let n = 'Emergency';
+
+    if (reason === 'RESCUE') {
+      s = 'RESCUE';
+      n = 'Rescue Service';
+    } else if (reason === 'POLICE') {
+      s = 'POLICE';
+      n = 'Police Air Support';
+    } else if (reason === 'FIRE') {
+      s = 'FIRE';
+      n = 'Fire Rescue';
+    } else if (reason === 'MEDICAL') {
+      s = 'MEDEVAC';
+      n = 'Air Ambulance';
+    } else if (reason) {
+      s = reason;
+      n = 'Emergency (' + reason + ')';
+    }
+    return { n, s, c };
+  }
 
   /** Airline entry {n, s, c} for a callsign like "BAW123", or null. */
   function airlineOf(callsign, military) {
@@ -317,10 +350,10 @@
     }
   }
 
-  /** A dashed red ring around emergency aircraft, visible even at icon size. */
-  function drawEmergencyRing(g) {
+  /** A dashed colored ring around emergency aircraft, visible even at icon size. */
+  function drawEmergencyRing(g, color = 'rgba(255, 59, 48, 0.95)') {
     g.save();
-    g.strokeStyle = 'rgba(255, 59, 48, 0.95)';
+    g.strokeStyle = color;
     g.lineWidth = 3;
     g.setLineDash([7, 4]);
     g.beginPath();
@@ -600,7 +633,7 @@
     g.lineTo(0, 49);
     g.stroke();
 
-    if (emergency) drawEmergencyRing(g);
+    if (emergency) drawEmergencyRing(g, accent);
 
     const url = canvas.toDataURL('image/png');
     iconCache.set(key, url);
@@ -845,7 +878,7 @@
     g.arc(0, -4, 2.1, 0, Math.PI * 2);
     g.fill();
 
-    if (emergency) drawEmergencyRing(g);
+    if (emergency) drawEmergencyRing(g, accent);
 
     const url = canvas.toDataURL('image/png');
     iconCache.set(key, url);
@@ -854,7 +887,7 @@
 
   function iconFor(rec, selected) {
     const accent = rec.emergency
-      ? '#ff3b30'
+      ? emergencyColor(rec.emergencyReason)
       : rec.military
         ? '#6e7b68'
         : rec.airline
@@ -877,9 +910,7 @@
         border-radius: 10px; padding: 10px 12px; color: #e8e8f0;
         font-family: monospace; font-size: 11px;
       }
-      /* Only the two real controls take touches: the panel must never become a
-         dead zone where a two-finger tilt cannot start. */
-      #flightCard .fc-close, #flightCard .fc-photo { pointer-events: auto; }
+      #flightCard button, #flightCard a { pointer-events: auto; }
       #flightCard .fc-main { display: flex; gap: 10px; align-items: flex-start; }
       #flightCard .fc-text { flex: 1; min-width: 0; }
       #flightCard .fc-head { display: flex; align-items: baseline; gap: 8px; }
@@ -995,8 +1026,10 @@
 
   function matchesFilter(rec) {
     switch (state.filter) {
-      case 'watch':
-        return !!rec.military || !!rec.emergency;
+      case 'military':
+        return !!rec.military;
+      case 'emergency':
+        return !!rec.emergency;
       case 'heli':
         return !!rec.heli;
       case 'low':
@@ -1019,13 +1052,14 @@
 
   function applyVisibility() {
     for (const rec of state.byHex.values()) {
-      const visible = matches(rec);
+      const isSelected = rec.hex === state.selectedHex;
+      const visible = matches(rec) || isSelected;
       rec.visible = visible;
       if (!visible) {
         releaseModel(rec.hex);
         dropTags(rec);
         rec.bb.show = false;
-        if (state.selectedHex === rec.hex) clearSelection();
+        if (isSelected) clearSelection();
       } else {
         // Do not resurrect the 2D icon over an aircraft that is currently
         // represented by a 3D model. applyVisibility() runs on every poll, and
@@ -1043,7 +1077,7 @@
   }
 
   function setFilter(filter) {
-    if (!['all', 'watch', 'heli', 'low'].includes(filter)) return;
+    if (!['all', 'military', 'emergency', 'heli', 'low'].includes(filter)) return;
     state.filter = filter;
     refreshFilterView();
   }
@@ -1185,16 +1219,19 @@
 
     for (const [hex, rec] of state.byHex) {
       if (seen.has(hex)) continue;
+      if (state.selectedHex === hex) continue; // Protect selected aircraft from transient dropouts
       releaseModel(hex);
       dropTags(rec);
       state.billboards.remove(rec.bb);
       state.byHex.delete(hex);
-      if (state.selectedHex === hex) clearSelection();
     }
 
     applyVisibility();
     stepPositions(now);
-    if (state.selectedHex) rebuildTrail();
+    if (state.selectedHex) {
+      rebuildTrail();
+      updateCard();
+    }
     renderToggle();
   }
 
@@ -1543,7 +1580,7 @@
     const fade = new Cesium.NearFarScalar(1.5e5, 1.0, 1.5e6, 0.7);
     // Emergency wins over military, which wins over the normal airline chip.
     const badge = rec.emergency
-      ? EMERGENCY_BADGE
+      ? emergencyBadge(rec)
       : rec.military
         ? MILITARY_BADGE
         : rec.airline;
@@ -1782,13 +1819,16 @@
     };
     const details = state.details.get(rec.hex) || {};
 
+    const emergBadge = rec.emergency ? emergencyBadge(rec) : null;
     set('fcCall', rec.callsign);
-    set('fcEmergency', rec.emergency ? 'EMERG' : '');
+    set('fcEmergency', emergBadge ? emergBadge.s : '');
+    const fcEmergencyEl = $('fcEmergency');
+    if (fcEmergencyEl && emergBadge) fcEmergencyEl.style.color = emergBadge.c;
     set('fcMil', rec.military ? 'MIL' : '');
     set(
       'fcAirline',
       rec.emergency
-        ? 'Emergency' + (rec.emergencyReason ? ' \u00b7 ' + rec.emergencyReason : '')
+        ? (emergBadge ? emergBadge.n : 'Emergency') + (rec.emergencyReason ? ' \u00b7 ' + rec.emergencyReason : '')
         : rec.military
           ? 'Military'
           : rec.airline
@@ -1796,8 +1836,8 @@
             : '',
     );
     set('fcSub', [rec.reg, typeName(rec.type)].filter(Boolean).join(' \u00b7 ') || rec.hex.toUpperCase());
-    state.ui.card.style.borderLeftColor = rec.emergency
-      ? '#d92b2b'
+    state.ui.card.style.borderLeftColor = emergBadge
+      ? emergBadge.c
       : rec.military
         ? '#6e7b68'
         : rec.airline
@@ -1949,12 +1989,12 @@
     handler.setInputAction((movement) => {
       const picked = viewer.scene.pick(movement.position);
       if (!Cesium.defined(picked)) return;
-      const id =
-        typeof picked.id === 'string'
-          ? picked.id
-          : picked.primitive && typeof picked.primitive.id === 'string'
-            ? picked.primitive.id
-            : null;
+      let id = null;
+      if (typeof picked.id === 'string') id = picked.id;
+      else if (picked.id && typeof picked.id.id === 'string') id = picked.id.id;
+      else if (picked.primitive && typeof picked.primitive.id === 'string') id = picked.primitive.id;
+      else if (picked.primitive && picked.primitive.id && typeof picked.primitive.id.id === 'string') id = picked.primitive.id.id;
+
       if (id && id.startsWith('flight:')) select(id.slice(7));
     }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
 

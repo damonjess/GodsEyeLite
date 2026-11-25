@@ -20,14 +20,16 @@ class FlightRepositoryParserTest {
               {"hex":"aaa111","flight":"NHZ23","lat":51.0,"lon":-0.1,"alt_baro":1000,
                "gs":100,"track":90,"category":"A7","emergency":"none"},
               {"hex":"bbb222","flight":"NPAS21","lat":51.0,"lon":-0.1,"alt_baro":1000,
-               "gs":100,"track":90,"category":"A7","emergency":"none"}
+               "gs":100,"track":90,"category":"A7","emergency":"none"},
+              {"hex":"ccc333","flight":"HLE56","lat":51.0,"lon":-0.1,"alt_baro":1000,
+               "gs":100,"track":90,"category":"A1","t":"EC35","emergency":"none"}
             ]}
         """.trimIndent()
 
         val repository = FlightRepository()
         val flights = repository.parse(body)
 
-        assertEquals(5, flights.size)
+        assertEquals(6, flights.size)
         assertTrue(flights[0].military)
         assertTrue(flights[0].emergency)
         assertEquals("7700", flights[0].emergencyReason)
@@ -47,6 +49,10 @@ class FlightRepositoryParserTest {
         assertFalse(flights[4].military)
         assertTrue(flights[4].emergency)
         assertEquals("POLICE", flights[4].emergencyReason)
+
+        assertFalse(flights[5].military)
+        assertTrue(flights[5].emergency)
+        assertEquals("MEDICAL", flights[5].emergencyReason)
 
         assertEquals(
             "MEDICAL",
