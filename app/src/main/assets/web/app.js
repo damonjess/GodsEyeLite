@@ -957,8 +957,10 @@
   // ── Lock-on / chase ────────────────────────────────────────────────────────
 
   const chaseScratch = {
+  const chaseScratch = {
     transform: new Cesium.Matrix4(),
     offset: new Cesium.Cartesian3(),
+    localDir: new Cesium.Cartesian3(),
     camera: new Cesium.Cartesian3(),
     direction: new Cesium.Cartesian3(),
     right: new Cesium.Cartesian3(),
@@ -966,12 +968,6 @@
     up: new Cesium.Cartesian3(),
   };
 
-  /**
-   * Places the camera behind and above a moving target, using the target's
-   * local east/north/up frame. This avoids Camera.lookAt's locked transform and
-   * the jump that follows when the transform is released: any globe touch can
-   * simply stop the preRender updates and leave the camera where it is.
-   */
   function chaseFrame() {
     const chase = state.chase;
     const target = chase.target;
@@ -986,34 +982,59 @@
     if (!Cesium.defined(position)) return;
 
     const heading = (target.getHeading && target.getHeading()) || 0;
-    const back = (target.getBack && target.getBack()) || 1000;
-    const up = (target.getUp && target.getUp()) || 300;
+    const back = (target.getBack && target.getBack()) || 0;
+    const up = (target.getUp && target.getUp()) || 0;
     const transform = Cesium.Transforms.eastNorthUpToFixedFrame(
       position,
       Cesium.Ellipsoid.WGS84,
       chaseScratch.transform,
     );
-    chaseScratch.offset.x = -Math.sin(heading) * back;
-    chaseScratch.offset.y = -Math.cos(heading) * back;
-    chaseScratch.offset.z = up;
-    const cameraPosition = Cesium.Matrix4.multiplyByPoint(
-      transform,
-      chaseScratch.offset,
-      chaseScratch.camera,
-    );
-    const direction = Cesium.Cartesian3.subtract(
-      position,
-      cameraPosition,
-      chaseScratch.direction,
-    );
-    Cesium.Cartesian3.normalize(direction, direction);
+
     const upWorld = Cesium.Matrix4.getColumn(transform, 2, chaseScratch.up4);
     Cesium.Cartesian3.fromCartesian4(upWorld, chaseScratch.up);
     Cesium.Cartesian3.normalize(chaseScratch.up, chaseScratch.up);
 
-    // A camera's up vector must be perpendicular to its view direction. Local
-    // up is not, especially when looking down at a satellite; using it directly
-    // flipped the camera away from Earth. Build a stable right/up basis.
+    let cameraPosition;
+    let direction;
+
+    if (target.firstPerson) {
+      const pitch = (target.getPitch && target.getPitch()) || -0.06;
+      const cosPitch = Math.cos(pitch);
+      // Sit at the nose (offset along heading by -back, up by up) and look forward.
+      chaseScratch.offset.x = -Math.sin(heading) * back;
+      chaseScratch.offset.y = -Math.cos(heading) * back;
+      chaseScratch.offset.z = up;
+      cameraPosition = Cesium.Matrix4.multiplyByPoint(
+        transform,
+        chaseScratch.offset,
+        chaseScratch.camera,
+      );
+      chaseScratch.localDir.x = Math.sin(heading) * cosPitch;
+      chaseScratch.localDir.y = Math.cos(heading) * cosPitch;
+      chaseScratch.localDir.z = Math.sin(pitch);
+      direction = Cesium.Matrix4.multiplyByPointAsVector(
+        transform,
+        chaseScratch.localDir,
+        chaseScratch.direction,
+      );
+      Cesium.Cartesian3.normalize(direction, direction);
+    } else {
+      chaseScratch.offset.x = -Math.sin(heading) * (back || 1000);
+      chaseScratch.offset.y = -Math.cos(heading) * (back || 1000);
+      chaseScratch.offset.z = up || 300;
+      cameraPosition = Cesium.Matrix4.multiplyByPoint(
+        transform,
+        chaseScratch.offset,
+        chaseScratch.camera,
+      );
+      direction = Cesium.Cartesian3.subtract(
+        position,
+        cameraPosition,
+        chaseScratch.direction,
+      );
+      Cesium.Cartesian3.normalize(direction, direction);
+    }
+
     const right = Cesium.Cartesian3.cross(direction, chaseScratch.up, chaseScratch.right);
     Cesium.Cartesian3.normalize(right, right);
     const cameraUp = Cesium.Cartesian3.cross(right, direction, chaseScratch.up);
@@ -1047,6 +1068,7 @@
   function stopChase() {
     const chase = state.chase;
     if (!chase.active) return;
+    const onStop = chase.target && chase.target.onStop;
     if (state.viewer && chase.listener) {
       state.viewer.scene.preRender.removeEventListener(chase.listener);
     }
@@ -1062,6 +1084,14 @@
     chase.target = null;
     chase.listener = null;
     chase.pointer = null;
+    if (typeof onStop === 'function') {
+      try {
+        onStop();
+      } catch (error) {
+        /* ignore cleanup errors */
+      }
+    }
+  }
   }
 
   // ── API used by Kotlin ─────────────────────────────────────────────────────

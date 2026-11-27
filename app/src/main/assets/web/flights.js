@@ -105,6 +105,7 @@
     contrailMaterials: null,
     byHex: new Map(),
     selectedHex: null,
+    cockpitHex: null,
     trailPrimitive: null,
     wallPrimitive: null,
     dropLines: null,
@@ -947,13 +948,47 @@
       #flightCard .fc-stats { display: flex; justify-content: space-between; margin-top: 9px; }
       #flightCard .fc-stats b { display: block; font-size: 13px; }
       #flightCard .fc-stats span { color: #9a9ab0; font-size: 9px; }
-      #flightCard .fc-actions { display: flex; justify-content: flex-end; margin-top: 8px; }
+      #flightCard .fc-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 8px; }
       #flightCard .fc-chase {
         pointer-events: auto; background: rgba(17, 24, 32, 0.94); border: 1px solid #35e0c8;
         color: #35e0c8; border-radius: 5px; padding: 5px 10px; font: 700 10px monospace;
         letter-spacing: 1px;
       }
       #flightCard .fc-chase.on { background: #35e0c8; color: #071014; }
+      #cockpitHud {
+        position: absolute; inset: 0; display: none; pointer-events: none; z-index: 4;
+        font-family: monospace; color: #39ff9e;
+        text-shadow: 0 0 6px rgba(57, 255, 158, 0.45), 0 1px 2px rgba(0, 0, 0, 0.9);
+      }
+      #cockpitHud .ch-hdg {
+        position: absolute; top: 56px; left: 50%; transform: translateX(-50%);
+        padding: 3px 10px; border: 1px solid rgba(57, 255, 158, 0.65);
+        background: rgba(4, 14, 10, 0.45); font-size: 12px; font-weight: 700; letter-spacing: 1.5px;
+      }
+      #cockpitHud .ch-center {
+        position: absolute; left: 50%; top: 46%; width: 150px; height: 90px;
+        transform: translate(-50%, -50%); overflow: hidden;
+      }
+      #cockpitHud .ch-horizon {
+        position: absolute; left: 0; right: 0; top: 50%; height: 1px;
+        background: linear-gradient(90deg, rgba(57,255,158,0.7) 0 34%, transparent 34% 66%, rgba(57,255,158,0.7) 66% 100%);
+        transition: transform 80ms linear;
+      }
+      #cockpitHud .ch-bore {
+        position: absolute; left: 50%; top: 50%; width: 18px; height: 10px;
+        transform: translate(-50%, -50%);
+        border-bottom: 2px solid #39ff9e; border-left: 2px solid #39ff9e; border-right: 2px solid #39ff9e;
+      }
+      #cockpitHud .ch-box {
+        position: absolute; top: 46%; transform: translateY(-50%);
+        padding: 5px 8px; border: 1px solid rgba(57, 255, 158, 0.6);
+        background: rgba(4, 14, 10, 0.42); min-width: 72px;
+      }
+      #cockpitHud .ch-spd { left: 16px; border-left: 3px solid #39ff9e; }
+      #cockpitHud .ch-alt { right: 16px; text-align: right; border-right: 3px solid #39ff9e; }
+      #cockpitHud .ch-val { font-size: 14px; font-weight: 700; }
+      #cockpitHud .ch-lbl { font-size: 8px; opacity: 0.8; letter-spacing: 1px; }
+      #cockpitHud .ch-vsi { font-size: 9px; margin-top: 2px; opacity: 0.9; }
     `;
     document.head.appendChild(style);
 
@@ -989,11 +1024,35 @@
         <div><b id="fcHdg"></b><span>HEADING</span></div>
         <div><b id="fcVs"></b><span>CLIMB</span></div>
       </div>
-      <div class="fc-actions"><button class="fc-chase" id="fcChase" type="button">CHASE</button></div>`;
+      <div class="fc-actions">
+        <button class="fc-chase" id="fcCockpit" type="button">COCKPIT</button>
+        <button class="fc-chase" id="fcChase" type="button">CHASE</button>
+      </div>`;
     document.body.appendChild(card);
     state.ui.card = card;
     document.getElementById('fcClose').addEventListener('click', clearSelection);
     document.getElementById('fcChase').addEventListener('click', toggleChase);
+    document.getElementById('fcCockpit').addEventListener('click', toggleCockpit);
+
+    const hud = document.createElement('div');
+    hud.id = 'cockpitHud';
+    hud.innerHTML = `
+      <div class="ch-hdg" id="chHdg">HDG 000°</div>
+      <div class="ch-box ch-spd">
+        <div class="ch-lbl">IAS / GS</div>
+        <div class="ch-val" id="chSpd">0 KT</div>
+      </div>
+      <div class="ch-center">
+        <div class="ch-horizon" id="chHorizon"></div>
+        <div class="ch-bore"></div>
+      </div>
+      <div class="ch-box ch-alt">
+        <div class="ch-lbl">ALTITUDE</div>
+        <div class="ch-val" id="chAlt">0 FT</div>
+        <div class="ch-vsi" id="chVsi">0 FPM</div>
+      </div>`;
+    document.body.appendChild(hud);
+    state.ui.cockpitHud = hud;
     // Planespotters asks that the photo links to its page. The link opens in
     // the phone's browser (Kotlin checks the host), never inside the globe.
     document.getElementById('fcPhotoBox').addEventListener('click', (event) => {
@@ -1076,7 +1135,7 @@
         // Do not resurrect the 2D icon over an aircraft that is currently
         // represented by a 3D model. applyVisibility() runs on every poll, and
         // without this guard the icon reappeared over the model every 10 s.
-        rec.bb.show = !rec.hasModel;
+        rec.bb.show = !rec.hasModel && rec.hex !== state.cockpitHex;
       }
     }
     renderFilterUi();
@@ -1936,7 +1995,7 @@
   /** Gives a pool's models to the closest matching aircraft. */
   function assignModelsToPool(pool, ranked, matching, rangeM, limit) {
     if (!pool.length) return;
-    const near = ranked.filter((n) => matching(n.rec) && n.d <= rangeM);
+    const near = ranked.filter((n) => matching(n.rec) && n.d <= rangeM && n.rec.hex !== state.cockpitHex);
     const count = Math.min(pool.length, limit == null ? pool.length : limit);
     const want = new Set(near.slice(0, count).map((n) => n.rec.hex));
 
@@ -1989,7 +2048,7 @@
     const rec = entry.hex ? state.byHex.get(entry.hex) : null;
     if (rec) {
       rec.hasModel = false;
-      rec.bb.show = rec.visible;
+      rec.bb.show = rec.visible && rec.hex !== state.cockpitHex;
     }
     entry.hex = null;
     entry.model.show = false;
@@ -2037,6 +2096,10 @@
         entry.model.modelMatrix = entry.matrix;
       }
     }
+    if (state.cockpitHex) {
+      const cockpitRec = state.byHex.get(state.cockpitHex);
+      if (cockpitRec) updateCockpitHud(cockpitRec);
+    }
   }
 
   // ── Tags: airline chip + callsign/altitude label on the nearest planes ──────
@@ -2077,6 +2140,7 @@
     const want = new Set();
     if (low) for (const n of ranked.slice(0, CFG.tagMax)) want.add(n.rec.hex);
     if (state.selectedHex) want.add(state.selectedHex);
+    if (state.cockpitHex) want.delete(state.cockpitHex);
     for (const rec of state.byHex.values()) {
       if (want.has(rec.hex)) tagPlane(rec);
       else dropTags(rec);
@@ -2206,6 +2270,81 @@
     updateCard();
   }
 
+  function updateCockpitHud(rec) {
+    if (!state.ui.cockpitHud || !rec || !rec.now) return;
+    const hdg = String(Math.round(rec.track || 0) % 360).padStart(3, '0');
+    const spd = Math.round((rec.speedMs || 0) / KT);
+    const alt = Math.round((rec.now.alt || 0) / FT).toLocaleString();
+    const fpm = Math.round((rec.climb || 0) / 0.00508 / 50) * 50;
+    const pitchRad = Math.atan2(rec.climb || 0, Math.max(rec.speedMs || 0, 50));
+    const pitchPx = Math.max(-32, Math.min(32, Math.round(pitchRad * 140)));
+
+    const hdgEl = document.getElementById('chHdg');
+    const spdEl = document.getElementById('chSpd');
+    const altEl = document.getElementById('chAlt');
+    const vsiEl = document.getElementById('chVsi');
+    const horEl = document.getElementById('chHorizon');
+    if (hdgEl) hdgEl.textContent = `${rec.callsign || rec.hex.toUpperCase()} · HDG ${hdg}°`;
+    if (spdEl) spdEl.textContent = `${spd} KT`;
+    if (altEl) altEl.textContent = `${alt} FT`;
+    if (vsiEl) vsiEl.textContent = `${fpm > 0 ? '+' : ''}${fpm} FPM`;
+    if (horEl) horEl.style.transform = `translateY(${pitchPx}px)`;
+  }
+
+  function exitCockpit() {
+    const prevHex = state.cockpitHex;
+    state.cockpitHex = null;
+    if (state.ui.cockpitHud) state.ui.cockpitHud.style.display = 'none';
+    if (state.dropLine) state.dropLine.show = true;
+    if (prevHex) {
+      const rec = state.byHex.get(prevHex);
+      if (rec && rec.visible && !rec.hasModel) rec.bb.show = true;
+    }
+    updateCard();
+  }
+
+  function toggleCockpit() {
+    const rec = state.selectedHex ? state.byHex.get(state.selectedHex) : null;
+    const api = window.GEVLite;
+    if (!rec || !api) return;
+    const id = 'cockpit:' + rec.hex;
+    if (typeof api.isChasing === 'function' && api.isChasing(id)) {
+      if (typeof api.stopChase === 'function') api.stopChase();
+      return;
+    }
+    if (typeof api.startChase === 'function') {
+      const started = api.startChase({
+        id,
+        kind: 'cockpit',
+        firstPerson: true,
+        name: rec.callsign || rec.hex,
+        getCartesian: () =>
+          rec.cart ||
+          (rec.now
+            ? Cesium.Cartesian3.fromDegrees(rec.now.lon, rec.now.lat, rec.now.alt)
+            : null),
+        getHeading: () => Cesium.Math.toRadians(rec.track || 0),
+        getPitch: () => {
+          const climbPitch = Math.atan2(rec.climb || 0, Math.max(rec.speedMs || 0, 50));
+          return Math.max(-0.35, Math.min(0.25, climbPitch - 0.06));
+        },
+        getBack: () => 0,
+        getUp: () => 2,
+        onStop: exitCockpit,
+      });
+      if (started) {
+        state.cockpitHex = rec.hex;
+        releaseModel(rec.hex);
+        rec.bb.show = false;
+        dropTags(rec);
+        if (state.dropLine) state.dropLine.show = false;
+        if (state.ui.cockpitHud) state.ui.cockpitHud.style.display = 'block';
+        updateCockpitHud(rec);
+      }
+    }
+    updateCard();
+  }
+
   function requestDetails(rec) {
     const seen = state.details.get(rec.hex);
     if (seen && seen.requested) return;
@@ -2231,7 +2370,7 @@
     if (
       api &&
       typeof api.isChasing === 'function' &&
-      api.isChasing('flight:' + state.selectedHex)
+      (api.isChasing('flight:' + state.selectedHex) || api.isChasing('cockpit:' + state.selectedHex))
     ) {
       if (typeof api.stopChase === 'function') api.stopChase();
     }
@@ -2377,6 +2516,18 @@
       const label = chasing ? 'RELEASE' : 'CHASE';
       if (chaseButton.textContent !== label) chaseButton.textContent = label;
       chaseButton.classList.toggle('on', chasing);
+    }
+
+    const cockpitButton = $('fcCockpit');
+    if (cockpitButton) {
+      const api = window.GEVLite;
+      const inCockpit =
+        !!api &&
+        typeof api.isChasing === 'function' &&
+        api.isChasing('cockpit:' + rec.hex);
+      const label = inCockpit ? 'EXIT COCKPIT' : 'COCKPIT';
+      if (cockpitButton.textContent !== label) cockpitButton.textContent = label;
+      cockpitButton.classList.toggle('on', inCockpit);
     }
 
     // Aircraft photo (Planespotters). Credit and link are required by its terms.

@@ -45,6 +45,12 @@
     note: '',
     selectionLabel: null,
     orbit: null,
+    coneOn: true,
+    conePrimitive: null,
+    footprint: null,
+    footprintRing: null,
+    nadirLine: null,
+    scanRays: [],
     timer: 0,
     ui: {},
   };
@@ -178,7 +184,7 @@
       #satCard .sc-stats { display: flex; gap: 16px; margin-top: 10px; }
       #satCard .sc-stats b { display: block; font-size: 13px; }
       #satCard .sc-stats span { color: #9a9ab0; font-size: 8px; }
-      #satCard .sc-actions { display: flex; justify-content: flex-end; margin-top: 9px; }
+      #satCard .sc-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 9px; }
       #satCard .sc-track {
         pointer-events: auto; background: rgba(17, 24, 32, 0.94); border: 1px solid #35e0c8;
         color: #35e0c8; border-radius: 5px; padding: 5px 10px; font: 700 10px monospace;
@@ -201,12 +207,17 @@
         <div><b id="scAlt"></b><span>ALTITUDE</span></div>
         <div><b id="scSpeed"></b><span>SPEED</span></div>
         <div><b id="scPeriod"></b><span>PERIOD</span></div>
+        <div><b id="scSwath"></b><span>SWATH</span></div>
       </div>
-      <div class="sc-actions"><button class="sc-track" id="scTrack" type="button">ORBIT</button></div>`;
+      <div class="sc-actions">
+        <button class="sc-track on" id="scCone" type="button">CONE</button>
+        <button class="sc-track" id="scTrack" type="button">ORBIT</button>
+      </div>`;
     document.body.appendChild(card);
     state.ui.card = card;
     document.getElementById('scClose').addEventListener('click', clearSelection);
     document.getElementById('scTrack').addEventListener('click', toggleOrbit);
+    document.getElementById('scCone').addEventListener('click', toggleCone);
   }
 
   function wireFilterUi() {
@@ -279,6 +290,7 @@
     if (state.collection) state.collection.removeAll();
     if (state.labels) state.labels.removeAll();
     if (state.orbit) state.orbit.removeAll();
+    removeSensorCone();
     state.items = [];
     state.byId.clear();
     state.selectionLabel = null;
@@ -409,7 +421,14 @@
       if (rec.bb.show) rec.bb.position = rec.cart;
     }
 
-    if (state.selectedId) updateCard();
+    if (state.selectedId) {
+      const selected = state.byId.get(state.selectedId);
+      if (selected) {
+        if (state.selectionLabel && selected.cart) state.selectionLabel.position = selected.cart;
+        updateSensorCone(selected);
+      }
+      updateCard();
+    }
   }
 
   // ── Selection ──────────────────────────────────────────────────────────────
@@ -423,6 +442,7 @@
     rec.bb.scale = CFG.selectedScale;
     rec.bb.color = Cesium.Color.WHITE;
     buildOrbit(rec);
+    buildSensorCone(rec);
     state.selectionLabel = state.labels.add({
       text: rec.name,
       font: '600 11px monospace',
@@ -450,6 +470,7 @@
       if (typeof api.stopChase === 'function') api.stopChase();
     }
     if (state.orbit) state.orbit.removeAll();
+    removeSensorCone();
     if (rec) {
       rec.bb.scale = CFG.iconScale;
       rec.bb.color = colorFor(rec.category);
@@ -477,6 +498,10 @@
     // The TLE's mean motion is rev/day; 86400 / rev/day gives minutes/orbit.
     const revsPerDay = rec.satrec && rec.satrec.no ? rec.satrec.no * 229.183118 : 0;
     set('scPeriod', revsPerDay ? Math.round(1440 / revsPerDay) + ' min' : '—');
+    const metrics = coneMetrics(rec);
+    set('scSwath', metrics ? metrics.swathKm.toLocaleString() + ' km' : '—');
+    const coneButton = document.getElementById('scCone');
+    if (coneButton) coneButton.classList.toggle('on', state.coneOn);
 
     const orbitButton = document.getElementById('scTrack');
     if (orbitButton) {
@@ -527,6 +552,174 @@
       log('orbit failed: ' + (error && error.message));
       state.orbit.removeAll();
     }
+  }
+
+  const EARTH_R_M = 6_371_000;
+
+  /**
+   * Computes curved-Earth coverage geometry for a satellite at altitude `altM`.
+   * Military/science LEO satellites use a tighter 30° minimum elevation (recon
+   * swath); stations, weather and navigation use a 15° comms/visibility horizon.
+   */
+  function coneMetrics(rec) {
+    const h = rec.altM || 0;
+    if (!Number.isFinite(h) || h < 50_000) return null;
+    const tightRecon =
+      (rec.category === 'military' || rec.category === 'science') && h < 2_500_000;
+    const elevRad = Cesium.Math.toRadians(tightRecon ? 30 : 15);
+    const ratio = (EARTH_R_M / (EARTH_R_M + h)) * Math.cos(elevRad);
+    if (ratio >= 1) return null;
+    const gamma = Math.acos(ratio) - elevRad;
+    if (gamma <= 0.002) return null;
+    const coneRadius = EARTH_R_M * Math.sin(gamma);
+    const coneHeight = h + EARTH_R_M * (1 - Math.cos(gamma));
+    const swathKm = Math.round((2 * EARTH_R_M * gamma) / 1000);
+    return { gamma, coneRadius, coneHeight, swathKm };
+  }
+
+  function removeSensorCone() {
+    if (state.conePrimitive && state.viewer) {
+      state.viewer.scene.primitives.remove(state.conePrimitive);
+    }
+    state.conePrimitive = null;
+    if (state.footprint) state.footprint.removeAll();
+    state.footprintRing = null;
+    state.nadirLine = null;
+    state.scanRays = [];
+  }
+
+  function buildSensorCone(rec) {
+    removeSensorCone();
+    if (!state.coneOn || !state.viewer || !state.footprint || !rec) return;
+    const metrics = coneMetrics(rec);
+    if (!metrics) return;
+
+    const baseColor = colorFor(rec.category);
+    try {
+      state.conePrimitive = state.viewer.scene.primitives.add(
+        new Cesium.Primitive({
+          geometryInstances: new Cesium.GeometryInstance({
+            geometry: new Cesium.CylinderGeometry({
+              length: 1.0,
+              topRadius: 0.0,
+              bottomRadius: 1.0,
+              slices: 48,
+              vertexFormat: Cesium.PerInstanceColorAppearance.VERTEX_FORMAT,
+            }),
+            attributes: {
+              color: Cesium.ColorGeometryInstanceAttribute.fromColor(
+                baseColor.withAlpha(0.16),
+              ),
+            },
+          }),
+          appearance: new Cesium.PerInstanceColorAppearance({
+            flat: true,
+            translucent: true,
+            closed: false,
+            renderState: {
+              cull: { enabled: false },
+              depthMask: false,
+            },
+          }),
+          asynchronous: false,
+        }),
+      );
+    } catch (error) {
+      log('sensor cone failed: ' + (error && error.message));
+      state.conePrimitive = null;
+    }
+
+    state.footprintRing = state.footprint.add({
+      positions: [],
+      width: 1.8,
+      material: Cesium.Material.fromType('Color', {
+        uniforms: { color: baseColor.withAlpha(0.85) },
+      }),
+    });
+    state.nadirLine = state.footprint.add({
+      positions: [],
+      width: 1.2,
+      arcType: Cesium.ArcType.NONE,
+      material: Cesium.Material.fromType('Color', {
+        uniforms: { color: baseColor.withAlpha(0.4) },
+      }),
+    });
+    state.scanRays = [];
+    for (let i = 0; i < 4; i++) {
+      state.scanRays.push(
+        state.footprint.add({
+          positions: [],
+          width: 1.0,
+          arcType: Cesium.ArcType.NONE,
+          material: Cesium.Material.fromType('Color', {
+            uniforms: { color: baseColor.withAlpha(0.32) },
+          }),
+        }),
+      );
+    }
+
+    updateSensorCone(rec);
+  }
+
+  function updateSensorCone(rec) {
+    if (!state.coneOn || !rec || !rec.cart) return;
+    const metrics = coneMetrics(rec);
+    if (!metrics) return;
+    rec.swathKm = metrics.swathKm;
+
+    // Move the unit cone via modelMatrix (no geometry rebuild).
+    if (state.conePrimitive) {
+      const midAlt = rec.altM - metrics.coneHeight / 2;
+      const midPos = Cesium.Cartesian3.fromDegrees(rec.lon, rec.lat, midAlt);
+      const matrix = Cesium.Transforms.eastNorthUpToFixedFrame(midPos);
+      const scale = Cesium.Matrix4.fromScale(
+        new Cesium.Cartesian3(metrics.coneRadius, metrics.coneRadius, metrics.coneHeight),
+      );
+      Cesium.Matrix4.multiply(matrix, scale, matrix);
+      state.conePrimitive.modelMatrix = matrix;
+    }
+
+    // Curved-Earth ground footprint ring + nadir beam + 4 cardinal scan rays.
+    const lat1 = Cesium.Math.toRadians(rec.lat);
+    const lon1 = Cesium.Math.toRadians(rec.lon);
+    const sinLat1 = Math.sin(lat1);
+    const cosLat1 = Math.cos(lat1);
+    const sinG = Math.sin(metrics.gamma);
+    const cosG = Math.cos(metrics.gamma);
+    const segments = 72;
+    const ring = [];
+    for (let i = 0; i <= segments; i++) {
+      const brng = (i / segments) * Math.PI * 2;
+      const lat2 = Math.asin(
+        Math.max(-1, Math.min(1, sinLat1 * cosG + cosLat1 * sinG * Math.cos(brng))),
+      );
+      const lon2 =
+        lon1 +
+        Math.atan2(
+          Math.sin(brng) * sinG * cosLat1,
+          cosG - sinLat1 * Math.sin(lat2),
+        );
+      ring.push(Cesium.Cartesian3.fromRadians(lon2, lat2, 2000));
+    }
+
+    if (state.footprintRing) state.footprintRing.positions = ring;
+    if (state.nadirLine) {
+      state.nadirLine.positions = [
+        rec.cart,
+        Cesium.Cartesian3.fromDegrees(rec.lon, rec.lat, 2000),
+      ];
+    }
+    for (let i = 0; i < state.scanRays.length; i++) {
+      state.scanRays[i].positions = [rec.cart, ring[i * 18]];
+    }
+  }
+
+  function toggleCone() {
+    state.coneOn = !state.coneOn;
+    const rec = state.selectedId ? state.byId.get(state.selectedId) : null;
+    if (state.coneOn && rec) buildSensorCone(rec);
+    else removeSensorCone();
+    updateCard();
   }
 
   function toggleOrbit() {
@@ -582,6 +775,7 @@
     state.collection = viewer.scene.primitives.add(new Cesium.BillboardCollection());
     state.labels = viewer.scene.primitives.add(new Cesium.LabelCollection());
     state.orbit = viewer.scene.primitives.add(new Cesium.PolylineCollection());
+    state.footprint = viewer.scene.primitives.add(new Cesium.PolylineCollection());
     window.addEventListener('gev:dismissCards', (event) => {
       if (event.detail !== 'sat') clearSelection();
     });

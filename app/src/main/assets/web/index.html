@@ -126,6 +126,23 @@
               <button data-event="volcano">VOLCANO</button>
             </div>
           </div>
+          <div class="layers-group">
+            <div class="layers-title">OPTICS &amp; HUD</div>
+            <div class="layer-seg" id="opticsMode" role="group" aria-label="Optics mode">
+              <button data-optics="std" class="on" aria-pressed="true">STD</button>
+              <button data-optics="nvg" aria-pressed="false">NVG</button>
+              <button data-optics="flir" aria-pressed="false">FLIR</button>
+              <button data-optics="crt" aria-pressed="false">CRT</button>
+            </div>
+            <button class="layer-row" id="layerReticle" aria-pressed="false">
+              <span class="layer-name">RETICLE HUD</span>
+              <span class="layer-switch" aria-hidden="true"></span>
+            </button>
+            <button class="layer-row" id="layerSolar" aria-pressed="false">
+              <span class="layer-name">DAY / NIGHT SUN</span>
+              <span class="layer-switch" aria-hidden="true"></span>
+            </button>
+          </div>
         </div>
 
         <div id="serviceWatchPanel" hidden>
@@ -218,5 +235,6 @@
     <script src="satellites.js"></script>
     <script src="weather.js"></script>
     <script src="events.js"></script>
+    <script src="optics.js"></script>
   </body>
 </html>
